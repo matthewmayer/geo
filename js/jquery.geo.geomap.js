@@ -1081,6 +1081,7 @@
         this._inOp = false;
         this._anchor = this._current;
         this._mouseDown = this._toolPan = this._panning = false;
+        this._trigger("panstop", window.event, { });
       }
     },
 
@@ -1099,6 +1100,7 @@
         if (!this._toolPan) {
           this._toolPan = true;
           this._$eventTarget.css("cursor", this._options["cursors"]["pan"]);
+          this._trigger("panstart", window.event, { });
         }
 
         if (this._mouseDown) {
