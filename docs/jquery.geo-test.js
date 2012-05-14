@@ -1,25 +1,6 @@
-// excanvas
-// Copyright 2006 Google Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-/* 
- * AppGeo/geo 
- * (c) 2007-2011, Applied Geographics, Inc. All rights reserved. 
- * Dual licensed under the MIT or GPL Version 2 licenses. 
- * http://jquery.org/license 
- */ 
- 
+/*! jQuery Geo - v1.0.0b1 - 2012-04-12
+ * http://jquerygeo.com
+ * Copyright (c) 2012 Ryan Westphal/Applied Geographics, Inc.; Licensed MIT, GPL */
 
 // Copyright 2006 Google Inc.
 //
@@ -1438,8 +1419,942 @@ if (!document.createElement('canvas').getContext) {
   })();
 
 } // if
+
+/*! JsRender v1.0pre: http://github.com/BorisMoore/jsrender */
+/*
+ * Optimized version of jQuery Templates, for rendering to string.
+ * Does not require jQuery, or HTML DOM
+ * Integrates with JsViews (http://github.com/BorisMoore/jsviews)
+ * Copyright 2012, Boris Moore
+ * Released under the MIT License.
+ */
+// informal pre beta commit counter: 3
+
+this.jsviews || this.jQuery && jQuery.views || (function( window, undefined ) {
+
+//========================== Top-level vars ==========================
+
+var versionNumber = "v1.0pre",
+
+	$, rTag, rTmplString, extend,
+	sub = {},
+	FALSE = false, TRUE = true,
+	jQuery = window.jQuery,
+
+	rPath = /^(?:null|true|false|\d[\d.]*|([\w$]+|~([\w$]+)|#(view|([\w$]+))?)([\w$.]*?)(?:[.[]([\w$]+)\]?)?|(['"]).*\8)$/g,
+	//                                 nil    object   helper    view  viewProperty pathTokens   leafToken     string
+
+	rParams = /(\()(?=|\s*\()|(?:([([])\s*)?(?:([#~]?[\w$.]+)?\s*((\+\+|--)|\+|-|&&|\|\||===|!==|==|!=|<=|>=|[<>%*!:?\/]|(=))\s*|([#~]?[\w$.]+)([([])?)|(,\s*)|(\(?)\\?(?:(')|("))|(?:\s*([)\]])([([]?))|(\s+)/g,
+	//          lftPrn        lftPrn2                path    operator err                                                eq         path2       prn    comma   lftPrn2   apos quot        rtPrn   prn2   space
+	// (left paren? followed by (path? followed by operator) or (path followed by paren?)) or comma or apos or quot or right paren or space
+
+    rNewLine = /\r?\n/g,
+	rUnescapeQuotes = /\\(['"])/g,
+	rEscapeQuotes = /\\?(['"])/g,
+	rBuildHash = /\x08(~)?([^\x08]+)\x08/g,
+
+	autoViewKey = 0,
+	autoTmplName = 0,
+	escapeMapForHtml = {
+		"&": "&amp;",
+		"<": "&lt;",
+		">": "&gt;"
+	},
+	tmplAttr = "data-jsv-tmpl",
+	fnDeclStr = "var j=j||" + (jQuery ? "jQuery." : "js") + "views,",
+	htmlSpecialChar = /[\x00"&'<>]/g,
+	slice = Array.prototype.slice,
+
+	render = {},
+
+	// jsviews object ($.views if jQuery is loaded)
+	jsv = {
+		jsviews: versionNumber,
+		sub: sub, // subscription, e.g. JsViews integration
+		debugMode: TRUE,
+		err: function( e ) {
+			return jsv.debugMode ? ("<br/><b>Error:</b> <em> " + (e.message || e) + ". </em>") : '""';
+		},
+		tmplFn: tmplFn,
+		render: render,
+		templates: templates,
+		tags: tags,
+		helpers: helpers,
+		converters: converters,
+		View: View,
+		convert: convert,
+		delimiters: setDelimiters,
+		tag: renderTag
+	};
+
+//========================== Top-level functions ==========================
+
+//===================
+// jsviews.delimiters
+//===================
+
+function setDelimiters( openChars, closeChars ) {
+	// Set the tag opening and closing delimiters. Default is "{{" and "}}"
+	// openChar, closeChars: opening and closing strings, each with two characters
+	var firstOpenChar = "\\" + openChars.charAt( 0 ), // Escape the characters - since they could be regex special characters
+		secondOpenChar = "\\" + openChars.charAt( 1 ),
+		firstCloseChar = "\\" + closeChars.charAt( 0 ),
+		secondCloseChar = "\\" + closeChars.charAt( 1 );
+	// Build regex with new delimiters
+	jsv.rTag = rTag // make rTag available to JsViews (or other components) for parsing binding expressions
+		= secondOpenChar
+			//          tag    (followed by / space or })   or  colon     or  html or code
+		+ "(?:(?:(\\w+(?=[\\/\\s" + firstCloseChar + "]))|(?:(\\w+)?(:)|(>)|(\\*)))"
+		//     params
+		+ "\\s*((?:[^" + firstCloseChar + "]|" + firstCloseChar + "(?!" + secondCloseChar + "))*?)"
+		//  slash or closeBlock
+		+ "(\\/)?|(?:\\/(\\w+)))"
+	//  }}
+	+ firstCloseChar;
+
+	// Default rTag:    tag          converter colon  html  code     params         slash   closeBlock
+	//	    /{{(?:(?:(\w+(?=[\/\s\}]))|(?:(\w+)?(:)|(>)|(\*)))\s*((?:[^}]|}(?!\}))*?)(\/)?|(?:\/(\w+)))}}
+
+	//      /{{(?:(?:(\w+(?=[\/!\s\}!]))|(?:(\w+)?(:)|(>)|(\*)))((?:[^\}]|}(?!}))*?)(\/)?|(?:\/(\w+)))}}/g;
+	rTag = new RegExp( firstOpenChar + rTag + secondCloseChar, "g" );
+	rTmplString = new RegExp( "<.*>|" + openChars + ".*" + closeChars );
+	return this;
+}
+
+//=================
+// View.hlp
+//=================
+
+function getHelper( helper ) {
+	// Helper method called as view.hlp() from compiled template, for helper functions or template parameters ~foo
+	var view = this,
+	tmplHelpers = view.tmpl.helpers || {};
+	helper = (view.ctx[ helper ] !== undefined ? view.ctx : tmplHelpers[ helper ] !== undefined ? tmplHelpers : helpers[ helper ] !== undefined ? helpers : {})[ helper ];
+	return typeof helper !== "function" ? helper : function() {
+		return helper.apply(view, arguments);
+	};
+}
+
+//=================
+// jsviews.convert
+//=================
+
+function convert( converter, view, text ) {
+	var tmplConverters = view.tmpl.converters;
+	converter = tmplConverters && tmplConverters[ converter ] || converters[ converter ];
+	return converter ? converter.call( view, text ) : text;
+}
+
+//=================
+// jsviews.tag
+//=================
+
+function renderTag( tag, parentView, converter, content, tagObject ) {
+	// Called from within compiled template function, to render a nested tag
+	// Returns the rendered tag
+	tagObject.props = tagObject.props || {};
+	var ret,
+		tmpl = tagObject.props.tmpl,
+		tmplTags = parentView.tmpl.tags,
+		nestedTemplates = parentView.tmpl.templates,
+		args = arguments,
+		tagFn = tmplTags && tmplTags[ tag ] || tags[ tag ];
+
+	if ( !tagFn ) {
+		return "";
+	}
+	// Set the tmpl property to the content of the block tag, unless set as an override property on the tag
+	content = content && parentView.tmpl.tmpls[ content - 1 ];
+	tmpl = tmpl || content || undefined;
+	tagObject.tmpl =
+		"" + tmpl === tmpl // if a string
+			? nestedTemplates && nestedTemplates[ tmpl ] || templates[ tmpl ] || templates( tmpl )
+			: tmpl;
+
+	tagObject.isTag = TRUE;
+	tagObject.converter = converter;
+	tagObject.view = parentView;
+	tagObject.renderContent = renderContent;
+	if ( parentView.ctx ) {
+		extend( tagObject.ctx, parentView.ctx);
+	}
+
+	ret = tagFn.apply( tagObject, args.length > 5 ? slice.call( args, 5 ) : [] );
+	return ret || ( ret == undefined ? "" : ret.toString()); // (If ret is the value 0 or false, will render to string)
+}
+
+//=================
+// View constructor
+//=================
+
+function View( context, path, parentView, data, template, index ) {
+	// Constructor for view object in view hierarchy. (Augmented by JsViews if JsViews is loaded)
+	var views = parentView.views,
+//	TODO: add this, as part of smart re-linking on existing content ($.link method), or remove completely
+//			self = parentView.views[ index ];
+//			if ( !self ) { ... }
+		self = {
+			tmpl: template,
+			path: path,
+			parent: parentView,
+			data: data,
+			ctx: context,
+			views: $.isArray( data ) ? [] : {},
+			hlp: getHelper
+		};
+
+	if ( $.isArray( views ))  {
+		views.splice(
+			self.index = index !== undefined
+				? index
+				: views.length, 0, self
+		);
+	} else {
+		views[ self.index = "_" + autoViewKey++ ] = self;
+	}
+	return self;
+}
+
+//=================
+// Registration
+//=================
+
+function addToStore( self, store, name, item, process ) {
+	// Add item to named store such as templates, helpers, converters...
+	var key, onStore;
+	if ( name && typeof name === "object" && !name.nodeType ) {
+		// If name is a map, iterate over map and call store for key
+		for ( key in name ) {
+			store( key, name[ key ]);
+		}
+		return self;
+	}
+	if ( !name || item === undefined ) {
+		if ( process ) {
+			item = process( undefined, item || name );
+		}
+	} else if ( "" + name === name ) { // name must be a string
+		if ( item === null ) {
+			// If item is null, delete this entry
+			delete store[name];
+		} else if ( item = process ? process( name, item ) : item ) {
+			store[ name ] = item;
+		}
+	}
+	if ( onStore = sub.onStoreItem ) {
+		// e.g. JsViews integration
+		onStore( store, name, item, process );
+	}
+	return item;
+}
+
+function templates( name, tmpl ) {
+	// Register templates
+	// Setter: Use $.view.tags( name, tagFn ) or $.view.tags({ name: tagFn, ... }) to add additional tags to the registered tags collection.
+	// Getter: Use var tagFn = $.views.tags( name ) or $.views.tags[name] or $.views.tags.name to return the function for the registered tag.
+	// Remove: Use $.view.tags( name, null ) to remove a registered tag from $.view.tags.
+
+	// When registering for {{foo a b c==d e=f}}, tagFn should be a function with the signature:
+	// function(a,b). The 'this' pointer will be a hash with properties c and e.
+	return addToStore( this, templates, name, tmpl, compile );
+}
+
+function tags( name, tagFn ) {
+	// Register template tags
+	// Setter: Use $.view.tags( name, tagFn ) or $.view.tags({ name: tagFn, ... }) to add additional tags to the registered tags collection.
+	// Getter: Use var tagFn = $.views.tags( name ) or $.views.tags[name] or $.views.tags.name to return the function for the registered tag.
+	// Remove: Use $.view.tags( name, null ) to remove a registered tag from $.view.tags.
+
+	// When registering for {{foo a b c==d e=f}}, tagFn should be a function with the signature:
+	// function(a,b). The 'this' pointer will be a hash with properties c and e.
+	return addToStore( this, tags, name, tagFn );
+}
+
+function helpers( name, helperFn ) {
+	// Register helper functions for use in templates (or in data-link expressions if JsViews is loaded)
+	// Setter: Use $.view.helpers( name, helperFn ) or $.view.helpers({ name: helperFn, ... }) to add additional helpers to the registered helpers collection.
+	// Getter: Use var helperFn = $.views.helpers( name ) or $.views.helpers[name] or $.views.helpers.name to return the function.
+	// Remove: Use $.view.helpers( name, null ) to remove a registered helper function from $.view.helpers.
+	// Within a template, access the helper using the syntax: {{... ~myHelper(...) ...}}.
+	return addToStore( this, helpers, name, helperFn );
+}
+
+function converters( name, converterFn ) {
+	// Register converter functions for use in templates (or in data-link expressions if JsViews is loaded)
+	// Setter: Use $.view.converters( name, converterFn ) or $.view.converters({ name: converterFn, ... }) to add additional converters to the registered converters collection.
+	// Getter: Use var converterFn = $.views.converters( name ) or $.views.converters[name] or $.views.converters.name to return the converter function.
+	// Remove: Use $.view.converters( name, null ) to remove a registered converter from $.view.converters.
+	// Within a template, access the converter using the syntax: {{myConverter:...}}.
+	return addToStore( this, converters, name, converterFn );
+}
+
+//=================
+// renderContent
+//=================
+
+function renderContent( data, context, parentView, path, index ) {
+	// Render template against data as a tree of subviews (nested template), or as a string (top-level template).
+	// tagName parameter for internal use only. Used for rendering templates registered as tags (which may have associated presenter objects)
+	var i, l, dataItem, newView, itemWrap, itemsWrap, itemResult, parentContext, tmpl, layout,
+		props = {},
+		swapContent = index === TRUE,
+		self = this,
+		result = "";
+
+	if ( self.isTag ) {
+		// This is a call from renderTag
+		tmpl = self.tmpl;
+		context = context || self.ctx;
+		parentView = parentView || self.view;
+		path = path || self.path;
+		index = index || self.index;
+		props = self.props;
+	} else {
+		tmpl = self.jquery && self[0] // This is a call $.fn.render
+			|| self; // This is a call from tmpl.render
+	}
+	parentView = parentView || jsv.topView;
+	parentContext = parentView.ctx;
+	layout = tmpl.layout;
+	if ( data === parentView ) {
+		// Inherit the data from the parent view.
+		// This may be the contents of an {{if}} block
+		data = parentView.data;
+		layout = TRUE;
+	}
+
+	// Set additional context on views created here, (as modified context inherited from the parent, and be inherited by child views)
+	// Note: If no jQuery, extend does not support chained copies - so limit extend() to two parameters
+	context = (context && context === parentContext)
+		? parentContext
+		: (parentContext
+			// if parentContext, make copy
+			? ((parentContext = extend( {}, parentContext ), context)
+				// If context, merge context with copied parentContext
+				? extend( parentContext, context )
+				: parentContext)
+			// if no parentContext, use context, or default to {}
+			: context || {});
+
+	if ( props.link === FALSE ) {
+		// Override inherited value of link by an explicit setting in props: link=false
+		// The child views of an unlinked view are also unlinked. So setting child back to true will not have any effect.
+		context.link = FALSE;
+	}
+	if ( !tmpl.fn ) {
+		tmpl = templates[ tmpl ] || templates( tmpl );
+	}
+	itemWrap = context.link && sub.onRenderItem;
+	itemsWrap = context.link && sub.onRenderItems;
+
+	if ( tmpl ) {
+		if ( $.isArray( data ) && !layout ) {
+			// Create a view for the array, whose child views correspond to each data item.
+			// (Note: if index and parentView are passed in along with parent view, treat as
+			// insert -e.g. from view.addViews - so parentView is already the view item for array)
+			newView = swapContent ? parentView : (index !== undefined && parentView) || View( context, path, parentView, data, tmpl, index );
+
+			for ( i = 0, l = data.length; i < l; i++ ) {
+				// Create a view for each data item.
+				dataItem = data[ i ];
+				itemResult = tmpl.fn( dataItem, View( context, path, newView, dataItem, tmpl, (index||0) + i ), jsv );
+				result += itemWrap ? itemWrap( itemResult, props ) : itemResult;
+			}
+		} else {
+			// Create a view for singleton data object.
+			newView = swapContent ? parentView : View( context, path, parentView, data, tmpl, index );
+			result += (data || layout) ? tmpl.fn( data, newView, jsv ) : "";
+		}
+		parentView.topKey = newView.index;
+		return itemsWrap ? itemsWrap( result, path, newView.index, tmpl, props ) : result;
+	}
+	return ""; // No tmpl. Could throw...
+}
+
+//===========================
+// Build and compile template
+//===========================
+
+// Generate a reusable function that will serve to render a template against data
+// (Compile AST then build template function)
+
+function syntaxError() {
+	throw "Syntax error";
+}
+
+function tmplFn( markup, tmpl, bind ) {
+	// Compile markup to AST (abtract syntax tree) then build the template function code from the AST nodes
+	// Used for compiling templates, and also by JsViews to build functions for data link expressions
+	var newNode, node, i, l, code, hasTag, hasEncoder, getsValue, hasConverter, hasViewPath, tag, converter, params, hash, nestedTmpl, allowCode,
+		tmplOptions = tmpl ? {
+			allowCode: allowCode = tmpl.allowCode,
+			debug: tmpl.debug
+		} : {},
+		nested = tmpl && tmpl.tmpls,
+		astTop = [],
+		loc = 0,
+		stack = [],
+		content = astTop,
+		current = [,,,astTop],
+		nestedIndex = 0;
+
+	//==== nested functions ====
+	function pushPreceedingContent( shift ) {
+		shift -= loc;
+		if ( shift ) {
+			content.push( markup.substr( loc, shift ).replace( rNewLine, "\\n" ));
+		}
+	}
+
+	function parseTag( all, tagName, converter, colon, html, code, params, slash, closeBlock, index ) {
+		//                  tag           converter colon  html  code     params         slash   closeBlock
+		//      /{{(?:(?:(\w+(?=[\/!\s\}!]))|(?:(\w+)?(:)|(?:(>)|(\*)))((?:[^\}]|}(?!}))*?)(\/)?|(?:\/(\w+)))}}/g;
+		// Build abstract syntax tree (AST): [ tagName, converter, params, content, hash, contentMarkup ]
+		if ( html ) {
+			colon = ":";
+			converter = "html";
+		}
+		var hash = "",
+			passedCtx = "",
+			block = !slash && !colon; // Block tag if not self-closing and not {{:}} or {{>}} (special case)
+
+		//==== nested helper function ====
+
+		tagName = tagName || colon;
+		pushPreceedingContent( index );
+		loc = index + all.length; // location marker - parsed up to here
+		if ( code ) {
+			if ( allowCode ) {
+				content.push([ "*", params.replace( rUnescapeQuotes, "$1" ) ]);
+			}
+		} else if ( tagName ) {
+			if ( tagName === "else" ) {
+				current[ 5 ] = markup.substring( current[ 5 ], index ); // contentMarkup for block tag
+				current = stack.pop();
+				content = current[ 3 ];
+				block = TRUE;
+			}
+			params = (params
+				? parseParams( params, bind )
+					.replace( rBuildHash, function( all, isCtx, keyValue ) {
+						if ( isCtx ) {
+							passedCtx += keyValue + ",";
+						} else {
+							hash += keyValue + ",";
+						}
+						return "";
+					})
+				: "");
+			hash = hash.slice( 0, -1 );
+			params = params.slice( 0, -1 );
+			newNode = [
+				tagName,
+				converter || "",
+				params,
+				block && [],
+				"{" + (hash ? ("props:{" + hash + "},"): "") + "path:'" + params + "'" + (passedCtx ? ",ctx:{" + passedCtx.slice( 0, -1 ) + "}" : "") + "}"
+			];
+			if ( block ) {
+				stack.push( current );
+				current = newNode;
+				current[ 5 ] = loc; // Store current location of open tag, to be able to add contentMarkup when we reach closing tag
+			}
+			content.push( newNode );
+		} else if ( closeBlock ) {
+			//if ( closeBlock !== current[ 0 ]) {
+			//	throw "unmatched close tag: /" + closeBlock + ". Expected /" + current[ 0 ];
+			//}
+			current[ 5 ] = markup.substring( current[ 5 ], index ); // contentMarkup for block tag
+			current = stack.pop();
+		}
+		if ( !current ) {
+			throw "Expected block tag";
+		}
+		content = current[ 3 ];
+	}
+	//==== /end of nested functions ====
+
+	markup = markup.replace( rEscapeQuotes, "\\$1" );
+
+	// Build the AST (abstract syntax tree) under astTop
+	markup.replace( rTag, parseTag );
+
+	pushPreceedingContent( markup.length );
+
+	// Use the AST (astTop) to build the template function
+	l = astTop.length;
+	code = (l ? "" : '"";');
+
+	for ( i = 0; i < l; i++ ) {
+		// AST nodes: [ tagName, converter, params, content, hash, contentMarkup ]
+		node = astTop[ i ];
+		if ( node[ 0 ] === "*" ) {
+			code = code.slice( 0, i ? -1 : -3 ) + ";" + node[ 1 ] + (i + 1 < l ? "ret+=" : "");
+		} else if ( "" + node === node ) { // type string
+			code += '"' + node + '"+';
+		} else {
+			tag = node[ 0 ];
+			converter = node[ 1 ];
+			params = node[ 2 ];
+			content = node[ 3 ];
+			hash = node[ 4 ];
+			markup = node[ 5 ];
+			if ( content ) {
+				// Create template object for nested template
+				nestedTmpl = TmplObject( markup, tmplOptions, tmpl, nestedIndex++ );
+				// Compile to AST and then to compiled function
+				tmplFn( markup, nestedTmpl);
+				nested.push( nestedTmpl );
+			}
+			hasViewPath = hasViewPath || hash.indexOf( "view" ) > -1;
+			code += (tag === ":"
+				? (converter === "html"
+					? (hasEncoder = TRUE, "e(" + params)
+					: converter
+						? (hasConverter = TRUE, 'c("' + converter + '",view,' + params)
+						: (getsValue = TRUE, "((v=" + params + ')!=u?v:""')
+				)
+				: (hasTag = TRUE, 't("' + tag + '",view,"' + (converter || "") + '",'
+					+ (content ? nested.length : '""') // For block tags, pass in the key (nested.length) to the nested content template
+					+ "," + hash + (params ? "," : "") + params))
+					+ ")+";
+		}
+	}
+	code =  new Function( "data, view, j, b, u", fnDeclStr
+		+ (getsValue ? "v," : "")
+		+ (hasTag ? "t=j.tag," : "")
+		+ (hasConverter ? "c=j.convert," : "")
+		+ (hasEncoder ? "e=j.converters.html," : "")
+		+ "ret; try{\n\n"
+		+ (tmplOptions.debug ? "debugger;" : "")
+		+ (allowCode ? 'ret=' : 'return ')
+		+ code.slice( 0, -1 ) + ";\n\n"
+		+ (allowCode ? "return ret;" : "")
+		+ "}catch(e){return j.err(e);}"
+	);
+
+	// Include only the var references that are needed in the code
+	if ( tmpl ) {
+		tmpl.fn = code;
+		tmpl.useVw = hasConverter || hasViewPath || hasTag;
+	}
+	return code;
+}
+
+function parseParams( params, bind ) {
+	var named,
+		fnCall = {},
+		parenDepth = 0,
+		quoted = FALSE, // boolean for string content in double quotes
+		aposed = FALSE; // or in single quotes
+
+	function parseTokens( all, lftPrn0, lftPrn, path, operator, err, eq, path2, prn, comma, lftPrn2, apos, quot, rtPrn, prn2, space ) {
+		// rParams = /(?:([([])\s*)?(?:([#~]?[\w$.]+)?\s*((\+\+|--)|\+|-|&&|\|\||===|!==|==|!=|<=|>=|[<>%*!:?\/]|(=))\s*|([#~]?[\w$.^]+)([([])?)|(,\s*)|(\(?)\\?(?:(')|("))|(?:\s*([)\]])([([]?))|(\s+)/g,
+		//            lftPrn                  path    operator err                                                eq         path2       prn    comma   lftPrn3   apos quot        rtPrn   prn2   space
+		// (left paren? followed by (path? followed by operator) or (path followed by paren?)) or comma or apos or quot or right paren or space
+		operator = operator || "";
+		lftPrn = lftPrn || lftPrn0 || lftPrn2;
+		path = path || path2;
+		prn = prn || prn2 || "";
+		operator = operator || "";
+
+		function parsePath( all, object, helper, view, viewProperty, pathTokens, leafToken ) {
+		// rPath = /^(?:null|true|false|\d[\d.]*|([\w$]+|~([\w$]+)|#(view|([\w$]+))?)([\w$.]*?)(?:[.[]([\w$]+)\]?)?|(['"]).*\8)$/g,
+		//                                        object   helper    view  viewProperty pathTokens   leafToken     string
+			if ( object ) {
+				var ret = (helper
+					? 'view.hlp("' + helper + '")'
+					: view
+						? "view"
+						: "data")
+				+ (leafToken
+					? (viewProperty
+						? "." + viewProperty
+						: helper
+							? ""
+							: (view ? "" : "." + object)
+						) + (pathTokens || "")
+					: (leafToken = helper ? "" : view ? viewProperty || "" : object, ""));
+
+				if ( bind && prn !== "(" ) {
+					ret = "b(" + ret + ',"' + leafToken + '")';
+				}
+				return ret + (leafToken ? "." + leafToken : "");
+			}
+			return all;
+		}
+
+		if ( err ) {
+			syntaxError();
+		} else {
+			return (aposed
+				// within single-quoted string
+				? (aposed = !apos, (aposed ? all : '"'))
+				: quoted
+					// within double-quoted string
+					? (quoted = !quot, (quoted ? all : '"'))
+					:
+				(
+					(lftPrn
+							? (parenDepth++, lftPrn)
+							: "")
+					+ (space
+						? (parenDepth
+							? ""
+							: named
+								? (named = FALSE, "\b")
+								: ","
+						)
+						: eq
+							// named param
+							? (parenDepth && syntaxError(), named = TRUE, '\b' + path + ':')
+							: path
+								// path
+								? (path.replace( rPath, parsePath )
+									+ (prn
+										? (fnCall[ ++parenDepth ] = TRUE, prn)
+										: operator)
+								)
+								: operator
+									? all
+									: rtPrn
+										// function
+										? ((fnCall[ parenDepth-- ] = FALSE, rtPrn)
+											+ (prn
+												? (fnCall[ ++parenDepth ] = TRUE, prn)
+												: "")
+										)
+										: comma
+											? (fnCall[ parenDepth ] || syntaxError(), ",") // We don't allow top-level literal arrays or objects
+											: lftPrn0
+												? ""
+												: (aposed = apos, quoted = quot, '"')
+				))
+			);
+		}
+	}
+	params = (params + " " ).replace( rParams, parseTokens );
+	return params;
+}
+
+function compile( name, tmpl, parent, options ) {
+	// tmpl is either a template object, a selector for a template script block, the name of a compiled template, or a template object
+	// options is the set of template properties, c
+	var tmplOrMarkup, elem, key, nested, nestedItem;
+
+	//==== nested functions ====
+	function tmplOrMarkupFromStr( value ) {
+		// If value is of type string - treat as selector, or name of compiled template
+		// Return the template object, if already compiled, or the markup string
+
+		if ( ("" + value === value) || value.nodeType > 0 ) {
+			// If selector is valid and returns at least one element, get first element
+			elem = value.nodeType > 0 ? value : !rTmplString.test( value ) && jQuery && jQuery( value )[0];
+			if ( elem && elem.type ) {
+				// It is a script element
+				// Create a name for data linking if none provided
+				value = templates[ elem.getAttribute( tmplAttr )];
+				if ( !value ) {
+					// Not already compiled and cached, so compile and cache the name
+					name = name || "_" + autoTmplName++;
+					elem.setAttribute( tmplAttr, name );
+					value = compile( name, elem.innerHTML, parent, options ); // Use tmpl as options
+					templates[ name ] = value;
+				}
+			}
+			return value;
+		}
+		// If value is not a string or dom element, return undefined
+	}
+
+	//==== Compile the template ====
+	tmplOrMarkup = tmplOrMarkupFromStr( tmpl );
+
+	// If tmpl is a template object, use it for options
+	options = options || (tmpl.markup ? tmpl : {});
+	options.name = name;
+	nested = options.templates;
+
+	// If tmpl is not a markup string or a selector string, then it must be a template object
+	// In that case, get it from the markup property of the object
+	if ( !tmplOrMarkup && tmpl.markup && (tmplOrMarkup = tmplOrMarkupFromStr( tmpl.markup ))) {
+		if ( tmplOrMarkup.fn && (tmplOrMarkup.debug !== tmpl.debug || tmplOrMarkup.allowCode !== tmpl.allowCode )) {
+			// if the string references a compiled template object, but the debug or allowCode props are different, need to recompile
+			tmplOrMarkup = tmplOrMarkup.markup;
+		}
+	}
+	if ( tmplOrMarkup !== undefined ) {
+		if ( name && !parent ) {
+			render[ name ] = function() {
+				return tmpl.render.apply( tmpl, arguments );
+			};
+		}
+		if ( tmplOrMarkup.fn || tmpl.fn ) {
+			// tmpl is already compiled, so use it, or if different name is provided, clone it
+			if ( tmplOrMarkup.fn ) {
+				if ( name && name !== tmplOrMarkup.name ) {
+					tmpl = extend( extend( {}, tmplOrMarkup ), options);
+				} else {
+					tmpl = tmplOrMarkup;
+				}
+			}
+		} else {
+			// tmplOrMarkup is a markup string, not a compiled template
+			// Create template object
+			tmpl = TmplObject( tmplOrMarkup, options, parent, 0 );
+			// Compile to AST and then to compiled function
+			tmplFn( tmplOrMarkup, tmpl );
+		}
+		for ( key in nested ) {
+			// compile nested template declarations
+			nestedItem = nested[ key ];
+			if ( nestedItem.name !== key ) {
+				nested[ key ] = compile( key, nestedItem, tmpl );
+			}
+		}
+		return tmpl;
+	}
+}
+//==== /end of function compile ====
+
+function TmplObject( markup, options, parent, index ) {
+	// Template object constructor
+
+	// nested helper function
+	function extendStore( storeName ) {
+		if ( parent[ storeName ]) {
+			// Include parent items except if overridden by item of same name in options
+			tmpl[ storeName ] = extend( extend( {}, parent[ storeName ] ), options[ storeName ] );
+		}
+	}
+
+	options = options || {};
+	var tmpl = {
+			markup: markup,
+			tmpls: [],
+			links: [],
+			render: renderContent
+		};
+	if ( parent ) {
+		if ( parent.templates ) {
+			tmpl.templates = extend( extend( {}, parent.templates ), options.templates );
+		}
+		tmpl.parent = parent;
+		tmpl.name = parent.name + "[" + index + "]";
+		tmpl.index = index;
+	}
+
+	extend( tmpl, options );
+	if ( parent ) {
+		extendStore( "templates" );
+		extendStore( "tags" );
+		extendStore( "helpers" );
+		extendStore( "converters" );
+	}
+	return tmpl;
+}
+
+//========================== Initialize ==========================
+
+if ( jQuery ) {
+	////////////////////////////////////////////////////////////////////////////////////////////////
+	// jQuery is loaded, so make $ the jQuery object
+	$ = jQuery;
+	$.templates = templates;
+	$.render = render;
+	$.views = jsv;
+	$.fn.render = renderContent;
+
+} else {
+	////////////////////////////////////////////////////////////////////////////////////////////////
+	// jQuery is not loaded.
+
+	$ = window.jsviews = jsv;
+	$.extend = function( target, source ) {
+		var name;
+		target =  target || {};
+		for ( name in source ) {
+			target[ name ] = source[ name ];
+		}
+		return target;
+	};
+
+	$.isArray = Array && Array.isArray || function( obj ) {
+		return Object.prototype.toString.call( obj ) === "[object Array]";
+	};
+}
+
+extend = $.extend;
+
+jsv.topView = { views: {}, tmpl: {}, hlp: getHelper, ctx: jsv.helpers };
+
+function replacerForHtml( ch ) {
+	// Original code from Mike Samuel <msamuel@google.com>
+	return escapeMapForHtml[ ch ]
+		// Intentional assignment that caches the result of encoding ch.
+		|| (escapeMapForHtml[ ch ] = "&#" + ch.charCodeAt( 0 ) + ";");
+}
+
+//========================== Register tags ==========================
+
+tags({
+	"if": function() {
+		var ifTag = this,
+			view = ifTag.view;
+
+		view.onElse = function( tagObject, args ) {
+			var i = 0,
+				l = args.length;
+
+			while ( l && !args[ i++ ]) {
+				// Only render content if args.length === 0 (i.e. this is an else with no condition) or if a condition argument is truey
+				if ( i === l ) {
+					return "";
+				}
+			}
+			view.onElse = undefined; // If condition satisfied, so won't run 'else'.
+			tagObject.path = "";
+			return tagObject.renderContent( view );
+			// Test is satisfied, so render content, while remaining in current data context
+			// By passing the view, we inherit data context from the parent view, and the content is treated as a layout template
+			// (so if the data is an array, it will not iterate over the data
+		};
+		return view.onElse( this, arguments );
+	},
+	"else": function() {
+		var view = this.view;
+		return view.onElse ? view.onElse( this, arguments ) : "";
+	},
+	"for": function() {
+		var i,
+			self = this,
+			result = "",
+			args = arguments,
+			l = args.length;
+		if ( self.props.layout ) {
+			self.tmpl.layout = TRUE;
+		}
+		for ( i = 0; i < l; i++ ) {
+			result += self.renderContent( args[ i ]);
+		}
+		return result;
+	},
+	"=": function( value ) {
+		return value;
+	},
+	"*": function( value ) {
+		return value;
+	}
+});
+
+//========================== Register global helpers ==========================
+
+//	helpers({ // Global helper functions
+//		// TODO add any useful built-in helper functions
+//	});
+
+//========================== Register converters ==========================
+
+converters({
+	html: function( text ) {
+		// HTML encoding helper: Replace < > & and ' and " by corresponding entities.
+		// inspired by Mike Samuel <msamuel@google.com>
+		return text != undefined ? String( text ).replace( htmlSpecialChar, replacerForHtml ) : "";
+	}
+});
+
+//========================== Define default delimiters ==========================
+setDelimiters( "{{", "}}" );
+
+})( this );
+
+/*! Copyright (c) 2011 Brandon Aaron (http://brandonaaron.net)
+ * Licensed under the MIT License (LICENSE.txt).
+ *
+ * Thanks to: http://adomas.org/javascript-mouse-wheel/ for some pointers.
+ * Thanks to: Mathias Bank(http://www.mathias-bank.de) for a scope bug fix.
+ * Thanks to: Seamus Leahy for adding deltaX and deltaY
+ *
+ * Version: 3.0.6
+ * 
+ * Requires: 1.2.2+
+ */
+
+(function($) {
+
+var types = ['DOMMouseScroll', 'mousewheel'];
+
+if ($.event.fixHooks) {
+    for ( var i=types.length; i; ) {
+        $.event.fixHooks[ types[--i] ] = $.event.mouseHooks;
+    }
+}
+
+$.event.special.mousewheel = {
+    setup: function() {
+        if ( this.addEventListener ) {
+            for ( var i=types.length; i; ) {
+                this.addEventListener( types[--i], handler, false );
+            }
+        } else {
+            this.onmousewheel = handler;
+        }
+    },
+    
+    teardown: function() {
+        if ( this.removeEventListener ) {
+            for ( var i=types.length; i; ) {
+                this.removeEventListener( types[--i], handler, false );
+            }
+        } else {
+            this.onmousewheel = null;
+        }
+    }
+};
+
+$.fn.extend({
+    mousewheel: function(fn) {
+        return fn ? this.bind("mousewheel", fn) : this.trigger("mousewheel");
+    },
+    
+    unmousewheel: function(fn) {
+        return this.unbind("mousewheel", fn);
+    }
+});
+
+
+function handler(event) {
+    var orgEvent = event || window.event, args = [].slice.call( arguments, 1 ), delta = 0, returnValue = true, deltaX = 0, deltaY = 0;
+    event = $.event.fix(orgEvent);
+    event.type = "mousewheel";
+    
+    // Old school scrollwheel delta
+    if ( orgEvent.wheelDelta ) { delta = orgEvent.wheelDelta/120; }
+    if ( orgEvent.detail     ) { delta = -orgEvent.detail/3; }
+    
+    // New school multidimensional scroll (touchpads) deltas
+    deltaY = delta;
+    
+    // Gecko
+    if ( orgEvent.axis !== undefined && orgEvent.axis === orgEvent.HORIZONTAL_AXIS ) {
+        deltaY = 0;
+        deltaX = -1*delta;
+    }
+    
+    // Webkit
+    if ( orgEvent.wheelDeltaY !== undefined ) { deltaY = orgEvent.wheelDeltaY/120; }
+    if ( orgEvent.wheelDeltaX !== undefined ) { deltaX = -1*orgEvent.wheelDeltaX/120; }
+    
+    // Add event and delta to the front of the arguments
+    args.unshift(event, delta, deltaX, deltaY);
+    
+    return ($.event.dispatch || $.event.handle).apply(this, args);
+}
+
+})(jQuery);
+
 /*!
- * jQuery UI Widget @VERSION
+ * jQuery UI Widget 1.8.18
  *
  * Copyright 2011, AUTHORS.txt (http://jqueryui.com/about)
  * Dual licensed under the MIT or GPL Version 2 licenses.
@@ -1714,582 +2629,10 @@ $.Widget.prototype = {
 
 })( jQuery );
 
-}
-
-/*! JsRender v1.0pre - (jsrender.js version: does not require jQuery): http://github.com/BorisMoore/jsrender */
-/*
- * Optimized version of jQuery Templates, fosr rendering to string, using 'codeless' markup.
- *
- * Copyright 2011, Boris Moore
- * Released under the MIT License.
- */
-window.JsViews || window.jQuery && jQuery.views || (function( window, undefined ) {
-
-var $, _$, JsViews, viewsNs, tmplEncode, render, rTag, registerTags, registerHelpers, extend,
-	FALSE = false, TRUE = true,
-	jQuery = window.jQuery, document = window.document,
-	htmlExpr = /^[^<]*(<[\w\W]+>)[^>]*$|\{\{\! /,
-	rPath = /^(true|false|null|[\d\.]+)|(\w+|\$(view|data|ctx|(\w+)))([\w\.]*)|((['"])(?:\\\1|.)*\7)$/g,
-	rParams = /(\$?[\w\.\[\]]+)(?:(\()|\s*(===|!==|==|!=|<|>|<=|>=)\s*|\s*(\=)\s*)?|(\,\s*)|\\?(\')|\\?(\")|(\))|(\s+)/g,
-	rNewLine = /\r?\n/g,
-	rUnescapeQuotes = /\\(['"])/g,
-	rEscapeQuotes = /\\?(['"])/g,
-	rBuildHash = /\x08([^\x08]+)\x08/g,
-	autoName = 0,
-	escapeMapForHtml = {
-		"&": "&amp;",
-		"<": "&lt;",
-		">": "&gt;"
-	},
-	htmlSpecialChar = /[\x00"&'<>]/g,
-	slice = Array.prototype.slice;
-
-if ( jQuery ) {
-
-	////////////////////////////////////////////////////////////////////////////////////////////////
-	// jQuery is loaded, so make $ the jQuery object
-	$ = jQuery;
-
-	$.fn.extend({
-		// Use first wrapped element as template markup.
-		// Return string obtained by rendering the template against data.
-		render: function( data, context, parentView, path ) {
-			return render( data, this[0], context, parentView, path );
-		},
-
-		// Consider the first wrapped element as a template declaration, and get the compiled template or store it as a named template.
-		template: function( name, context ) {
-			return $.template( name, this[0], context );
-		}
-	});
-
-} else {
-
-	////////////////////////////////////////////////////////////////////////////////////////////////
-	// jQuery is not loaded. Make $ the JsViews object
-
-	// Map over the $ in case of overwrite
-	_$ = window.$;
-
-	window.JsViews = JsViews = window.$ = $ = {
-		extend: function( target, source ) {
-			var name;
-			for ( name in source ) {
-				target[ name ] = source[ name ];
-			}
-			return target;
-		},
-		isArray: Array.isArray || function( obj ) {
-			return Object.prototype.toString.call( obj ) === "[object Array]";
-		},
-		noConflict: function() {
-			if ( window.$ === JsViews ) {
-				window.$ = _$;
-			}
-			return JsViews;
-		}
-	};
-}
-
-extend = $.extend;
-
-//=================
-// View constructor
-//=================
-
-function View( context, path, parentView, data, template ) {
-	// Returns a view data structure for a new rendered instance of a template.
-	// The content field is a hierarchical array of strings and nested views.
-
-	parentView = parentView || { viewsCount:0, ctx: viewsNs.helpers };
-
-	var parentContext = parentView && parentView.ctx;
-
-	return {
-		jsViews: "v1.0pre",
-		path: path || "",
-		// inherit context from parentView, merged with new context.
-		itemNumber: ++parentView.viewsCount || 1,
-		viewsCount: 0,
-		tmpl: template,
-		data: data || parentView.data || {},
-		// Set additional context on this view (which will modify the context inherited from the parent, and be inherited by child views)
-		ctx : context && context === parentContext
-			? parentContext
-			: (parentContext ? extend( extend( {}, parentContext ), context ) : context||{}), 
-			// If no jQuery, extend does not support chained copies - so limit to two parameters
-		parent: parentView
-	};
-}
-extend( $, {
-	views: viewsNs = {
-		templates: {},
-		tags: {
-			"if": function() {
-				var ifTag = this,
-					view = ifTag._view;
-				view.onElse = function( presenter, args ) {
-					var i = 0,
-						l = args.length;
-					while ( l && !args[ i++ ]) {
-						// Only render content if args.length === 0 (i.e. this is an else with no condition) or if a condition argument is truey
-						if ( i === l ) {
-							return "";
-						}
-					}
-					view.onElse = undefined; // If condition satisfied, so won't run 'else'.
-					return render( view.data, presenter.tmpl, view.ctx, view);
-				};
-				return view.onElse( this, arguments );
-			},
-			"else": function() {
-				var view = this._view;
-				return view.onElse ? view.onElse( this, arguments ) : "";
-			},
-			each: function() {
-				var i, 
-					self = this,
-					result = "",
-					args = arguments,
-					l = args.length,
-					content = self.tmpl,
-					view = self._view;
-				for ( i = 0; i < l; i++ ) {
-					result += args[ i ] ? render( args[ i ], content, self.ctx || view.ctx, view, self._path, self._ctor ) : "";
-				}
-				return l ? result 
-					// If no data parameter, use the current $data from view, and render once
-					:  result + render( view.data, content, view.ctx, view, self._path, self.tag );
-			},
-			"=": function( value ) {
-				return value;
-			},
-			"*": function( value ) {
-				return value;
-			}
-		},
-		helpers: {
-			not: function( value ) {
-				return !value;
-			}
-		},
-		allowCode: FALSE,
-		debugMode: TRUE,
-		err: function( e ) {
-			return viewsNs.debugMode ? ("<br/><b>Error:</b> <em> " + (e.message || e) + ". </em>"): '""';
-		},
-
-//===============
-// setDelimiters
-//===============
-
-		setDelimiters: function( openTag, closeTag ) {
-			// Set or modify the delimiter characters for tags: "{{" and "}}"
-			var firstCloseChar = closeTag.charAt( 0 ),
-				secondCloseChar = closeTag.charAt( 1 );
-			openTag = "\\" + openTag.charAt( 0 ) + "\\" + openTag.charAt( 1 );
-			closeTag = "\\" + firstCloseChar + "\\" + secondCloseChar;
-
-			// Build regex with new delimiters
-			//           {{
-			rTag = openTag
-				//       #      tag    (followed by space,! or })             or equals or  code
-				+ "(?:(?:(\\#)?(\\w+(?=[!\\s\\" + firstCloseChar + "]))" + "|(?:(\\=)|(\\*)))"
-				//     params
-				+ "\\s*((?:[^\\" + firstCloseChar + "]|\\" + firstCloseChar + "(?!\\" + secondCloseChar + "))*?)"
-				//   encoding
-				+ "(!(\\w*))?"
-				//        closeBlock
-				+ "|(?:\\/([\\w\\$\\.\\[\\]]+)))"
-			//  }}
-			+ closeTag;
-
-			// Default rTag:     #    tag              equals code        params         encoding    closeBlock
-			//      /\{\{(?:(?:(\#)?(\w+(?=[\s\}!]))|(?:(\=)|(\*)))((?:[^\}]|\}(?!\}))*?)(!(\w*))?|(?:\/([\w\$\.\[\]]+)))\}\}/g;
-
-			rTag = new RegExp( rTag, "g" );
-		},
+};
 
 
-//===============
-// registerTags
-//===============
-
-		// Register declarative tag.
-		registerTags: registerTags = function( name, tagFn ) {
-			var key;
-			if ( typeof name === "object" ) {
-				for ( key in name ) {
-					registerTags( key, name[ key ]);
-				}
-			} else {
-				// Simple single property case.
-				viewsNs.tags[ name ] = tagFn;
-			}
-			return this;
-		},
-
-//===============
-// registerHelpers
-//===============
-
-		// Register helper function for use in markup.
-		registerHelpers: registerHelpers = function( name, helper ) {
-			if ( typeof name === "object" ) {
-				// Object representation where property name is path and property value is value.
-				// TODO: We've discussed an "objectchange" event to capture all N property updates here. See TODO note above about propertyChanges.
-				var key;
-				for ( key in name ) {
-					registerHelpers( key, name[ key ]);
-				}
-			} else {
-				// Simple single property case.
-				viewsNs.helpers[ name ] = helper;
-			}
-			return this;
-		},
-
-//===============
-// tmpl.encode
-//===============
-
-		encode: function( encoding, text ) {
-			return text
-				? ( tmplEncode[ encoding || "html" ] || tmplEncode.html)( text ) // HTML encoding is the default
-				: "";
-		},
-
-		encoders: tmplEncode = {
-			"none": function( text ) {
-				return text;
-			},
-			"html": function( text ) {
-				// HTML encoding helper: Replace < > & and ' and " by corresponding entities.
-				// Implementation, from Mike Samuel <msamuel@google.com>
-				return String( text ).replace( htmlSpecialChar, replacerForHtml );
-			}
-			//TODO add URL encoding, and perhaps other encoding helpers...
-		},
-
-//===============
-// renderTag
-//===============
-
-		renderTag: function( tag, view, encode, content, tagProperties ) {
-			// This is a tag call, with arguments: "tag", view, encode, content, presenter [, params...]
-			var ret, ctx, name,
-				args = arguments,
-				presenters = viewsNs.presenters;
-				hash = tagProperties._hash,
-				tagFn = viewsNs.tags[ tag ];
-
-			if ( !tagFn ) {
-				return "";
-			}
-			
-			content = content && view.tmpl.nested[ content - 1 ];
-			tagProperties.tmpl = tagProperties.tmpl || content || undefined;
-			// Set the tmpl property to the content of the block tag, unless set as an override property on the tag
-		
-			if ( presenters && presenters[ tag ]) {
-				ctx = extend( extend( {}, tagProperties.ctx ), tagProperties );  
-				delete ctx.ctx;  
-				delete ctx._path;  
-				delete ctx.tmpl;
-				tagProperties.ctx = ctx;  
-				tagProperties._ctor = tag + (hash ? "=" + hash.slice( 0, -1 ) : "");
-
-				tagProperties = extend( extend( {}, tagFn ), tagProperties );
-				tagFn = viewsNs.tags.each; // Use each to render the layout template against the data
-			} 
-
-			tagProperties._encode = encode;
-			tagProperties._view = view;
-			ret = tagFn.apply( tagProperties, args.length > 5 ? slice.call( args, 5 ) : [view.data] );
-			return ret || (ret === undefined ? "" : ret.toString()); // (If ret is the value 0 or false or null, will render to string) 
-		}
-	},
-
-//===============
-// render
-//===============
-
-	render: render = function( data, tmpl, context, parentView, path, tagName ) {
-		// Render template against data as a tree of subviews (nested template), or as a string (top-level template).
-		// tagName parameter for internal use only. Used for rendering templates registered as tags (which may have associated presenter objects)
-		var i, l, dataItem, arrayView, content, result = "";
-
-		if ( arguments.length === 2 && data.jsViews ) {
-			parentView = data;
-			context = parentView.ctx;
-			data = parentView.data;
-		}
-		tmpl = $.template( tmpl );
-		if ( !tmpl ) {
-			return ""; // Could throw...
-		}
-
-		if ( $.isArray( data )) {
-			// Create a view item for the array, whose child views correspond to each data item.
-			arrayView = new View( context, path, parentView, data);
-			l = data.length;
-			for ( i = 0, l = data.length; i < l; i++ ) {
-				dataItem = data[ i ];
-				content = dataItem ? tmpl( dataItem, new View( context, path, arrayView, dataItem, tmpl, this )) : "";
-				result += viewsNs.activeViews ? "<!--item-->" + content + "<!--/item-->" : content;
-			}
-		} else {
-			result += tmpl( data, new View( context, path, parentView, data, tmpl ));
-		}
-
-		return viewsNs.activeViews
-			// If in activeView mode, include annotations
-			? "<!--tmpl(" + (path || "") + ") " + (tagName ? "tag=" + tagName : tmpl._name) + "-->" + result + "<!--/tmpl-->"
-			// else return just the string result
-			: result;
-	},
-
-//===============
-// template
-//===============
-
-	template: function( name, tmpl ) {
-		// Set:
-		// Use $.template( name, tmpl ) to cache a named template,
-		// where tmpl is a template string, a script element or a jQuery instance wrapping a script element, etc.
-		// Use $( "selector" ).template( name ) to provide access by name to a script block template declaration.
-
-		// Get:
-		// Use $.template( name ) to access a cached template.
-		// Also $( selectorToScriptBlock ).template(), or $.template( null, templateString )
-		// will return the compiled template, without adding a name reference.
-		// If templateString is not a selector, $.template( templateString ) is equivalent
-		// to $.template( null, templateString ). To ensure a string is treated as a template,
-		// include an HTML element, an HTML comment, or a template comment tag.
-
-		if (tmpl) {
-			// Compile template and associate with name
-			if ( "" + tmpl === tmpl ) { // type string
-				// This is an HTML string being passed directly in.
-				tmpl = compile( tmpl );
-			} else if ( jQuery && tmpl instanceof $ ) {
-				tmpl = tmpl[0];
-			}
-			if ( tmpl ) {
-				if ( jQuery && tmpl.nodeType ) {
-					// If this is a template block, use cached copy, or generate tmpl function and cache.
-					tmpl = $.data( tmpl, "tmpl" ) || $.data( tmpl, "tmpl", compile( tmpl.innerHTML ));
-				}
-				viewsNs.templates[ tmpl._name = tmpl._name || name || "_" + autoName++ ] = tmpl;
-			}
-			return tmpl;
-		}
-		// Return named compiled template
-		return name
-			? "" + name !== name // not type string
-				? (name._name
-					? name // already compiled
-					: $.template( null, name ))
-				: viewsNs.templates[ name ] ||
-					// If not in map, treat as a selector. (If integrated with core, use quickExpr.exec)
-					$.template( null, htmlExpr.test( name ) ? name : try$( name ))
-			: null;
-	}
-});
-
-viewsNs.setDelimiters( "{{", "}}" );
-
-//=================
-// compile template
-//=================
-
-// Generate a reusable function that will serve to render a template against data
-// (Compile AST then build template function)
-
-function parsePath( all, comp, object, viewDataCtx, viewProperty, path, string, quot ) {
-	return object
-		? ((viewDataCtx
-			? viewProperty
-				? ("$view." + viewProperty)
-				: object
-			:("$data." + object)
-		)  + ( path || "" ))
-		: string || (comp || "");
-}
-
-function compile( markup ) {
-	var newNode,
-		loc = 0,
-		stack = [],
-		topNode = [],
-		content = topNode,
-		current = [,,topNode];
-
-	function pushPreceedingContent( shift ) {
-		shift -= loc;
-		if ( shift ) {
-			content.push( markup.substr( loc, shift ).replace( rNewLine,"\\n"));
-		}
-	}
-
-	function parseTag( all, isBlock, tagName, equals, code, params, useEncode, encode, closeBlock, index ) {
-		// rTag    :    #    tagName          equals code        params         encode      closeBlock
-		// /\{\{(?:(?:(\#)?(\w+(?=[\s\}!]))|(?:(\=)|(\*)))((?:[^\}]|\}(?!\}))*?)(!(\w*))?|(?:\/([\w\$\.\[\]]+)))\}\}/g;
-
-		// Build abstract syntax tree: [ tagName, params, content, encode ]
-		var named,
-			hash = "",
-			parenDepth = 0,
-			quoted = FALSE, // boolean for string content in double qoutes
-			aposed = FALSE; // or in single qoutes
-
-		function parseParams( all, path, paren, comp, eq, comma, apos, quot, rightParen, space, index ) {
-			//      path          paren eq      comma   apos   quot  rtPrn  space
-			// /(\$?[\w\.\[\]]+)(?:(\()|(===)|(\=))?|(\,\s*)|\\?(\')|\\?(\")|(\))|(\s+)/g
-
-			return aposed
-				// within single-quoted string
-				? ( aposed = !apos, (aposed ? all : '"'))
-				: quoted
-					// within double-quoted string
-					? ( quoted = !quot, (quoted ? all : '"'))
-					: comp
-						// comparison
-						? ( path.replace( rPath, parsePath ) + comp)
-						: eq
-							// named param
-							? parenDepth ? "" :( named = TRUE, '\b' + path + ':')
-							: paren
-								// function
-								? (parenDepth++, path.replace( rPath, parsePath ) + '(')
-								: rightParen
-									// function
-									? (parenDepth--, ")")
-									: path
-										// path
-										? path.replace( rPath, parsePath )
-										: comma
-											? ","
-											: space
-												? (parenDepth
-													? ""
-													: named
-														? ( named = FALSE, "\b")
-														: ","
-												)
-												: (aposed = apos, quoted = quot, '"');
-		}
-
-		tagName = tagName || equals;
-		pushPreceedingContent( index );
-		if ( code ) {
-			if ( viewsNs.allowCode ) {
-				content.push([ "*", params.replace( rUnescapeQuotes, "$1" )]);
-			}
-		} else if ( tagName ) {
-			if ( tagName === "else" ) {
-				current = stack.pop();
-				content = current[ 2 ];
-				isBlock = TRUE;
-			}
-			params = (params
-				? (params + " ")
-					.replace( rParams, parseParams )
-					.replace( rBuildHash, function( all, keyValue, index ) {
-						hash += keyValue + ",";
-						return "";
-					})
-				: "");
-			params = params.slice( 0, -1 );
-			newNode = [
-				tagName,
-				useEncode ? encode || "none" : "",
-				isBlock && [],
-				"{" + hash + "_hash:'" +  hash + "',_path:'" + params + "'}",
-				params
-			];
-
-			if ( isBlock ) {
-				stack.push( current );
-				current = newNode;
-			}
-			content.push( newNode );
-		} else if ( closeBlock ) {
-			current = stack.pop();
-		}
-		loc = index + all.length; // location marker - parsed up to here
-		if ( !current ) {
-			throw "Expected block tag";
-		}
-		content = current[ 2 ];
-	}
-	markup = markup.replace( rEscapeQuotes, "\\$1" );
-	markup.replace( rTag, parseTag );
-	pushPreceedingContent( markup.length );
-	return buildTmplFunction( topNode );
-}
-
-// Build javascript compiled template function, from AST
-function buildTmplFunction( nodes ) {
-	var ret, node, i,
-		nested = [],
-		l = nodes.length,
-		code = "try{var views="
-			+ (jQuery ? "jQuery" : "JsViews")
-			+ '.views,tag=views.renderTag,enc=views.encode,html=views.encoders.html,$ctx=$view && $view.ctx,result=""+\n\n';
-
-	for ( i = 0; i < l; i++ ) {
-		node = nodes[ i ];
-		if ( node[ 0 ] === "*" ) {
-			code = code.slice( 0, i ? -1 : -3 ) + ";" + node[ 1 ] + ( i + 1 < l ? "result+=" : "" );
-		} else if ( "" + node === node ) { // type string
-			code += '"' + node + '"+';
-		} else {
-			var tag = node[ 0 ],
-				encode = node[ 1 ],
-				content = node[ 2 ],
-				obj = node[ 3 ],
-				params = node[ 4 ],
-				paramsOrEmptyString = params + '||"")+';
-
-			if( content ) {
-				nested.push( buildTmplFunction( content ));
-			}
-			code += tag === "="
-				? (!encode || encode === "html"
-					? "html(" + paramsOrEmptyString
-					: encode === "none"
-						? ("(" + paramsOrEmptyString)
-						: ('enc("' + encode + '",' + paramsOrEmptyString)
-				)
-				: 'tag("' + tag + '",$view,"' + ( encode || "" ) + '",'
-					+ (content ? nested.length : '""') // For block tags, pass in the key (nested.length) to the nested content template
-					+ "," + obj + (params ? "," : "") + params + ")+";
-		}
-	}
-	ret = new Function( "$data, $view", code.slice( 0, -1) + ";return result;\n\n}catch(e){return views.err(e);}" );
-	ret.nested = nested;
-	return ret;
-}
-
-//========================== Private helper functions, used by code above ==========================
-
-function replacerForHtml( ch ) {
-	// Original code from Mike Samuel <msamuel@google.com>
-	return escapeMapForHtml[ ch ]
-		// Intentional assignment that caches the result of encoding ch.
-		|| ( escapeMapForHtml[ ch ] = "&#" + ch.charCodeAt( 0 ) + ";" );
-}
-
-function try$( selector ) {
-	// If selector is valid, return jQuery object, otherwise return (invalid) selector string
-	try {
-		return $( selector );
-	} catch( e) {}
-	return selector;
-}
-})( window );
-﻿(function ($, window, undefined) {
+(function ($, window, undefined) {
   var pos_oo = Number.POSITIVE_INFINITY,
       neg_oo = Number.NEGATIVE_INFINITY;
 
@@ -2397,6 +2740,28 @@ function try$( selector ) {
              bbox2[ 3 ] < bbox1[ 1 ];
     },
 
+    polygonize: function( bbox, _ignoreGeo /* Internal Use Only */ ) {
+      // adaptation of Polygonizer class in JTS for use with bboxes
+      var wasGeodetic = false;
+      if ( !_ignoreGeo && $.geo.proj && this._isGeodetic( bbox ) ) {
+        wasGeodetic = true;
+        bbox = $.geo.proj.fromGeodetic(bbox);
+      }
+
+      var polygon = {
+        type: "Polygon",
+        coordinates: [ [
+          [ bbox[ 0 ], bbox[ 1 ] ],
+          [ bbox[ 0 ], bbox[ 3 ] ],
+          [ bbox[ 2 ], bbox[ 3 ] ],
+          [ bbox[ 2 ], bbox[ 1 ] ],
+          [ bbox[ 0 ], bbox[ 1 ] ]
+        ] ]
+      };
+
+      return wasGeodetic ? $.geo.proj.toGeodetic(polygon) : polygon;
+    },
+
     reaspect: function (bbox, ratio, _ignoreGeo /* Internal Use Only */ ) {
       // not in JTS
       var wasGeodetic = false;
@@ -2410,7 +2775,7 @@ function try$( selector ) {
           center = this.center(bbox, true),
           dx, dy;
 
-      if (width != 0 && height != 0 && ratio > 0) {
+      if (width !== 0 && height !== 0 && ratio > 0) {
         if (width / height > ratio) {
           dx = width / 2;
           dy = dx / ratio;
@@ -2484,6 +2849,7 @@ function try$( selector ) {
     // bbox (Geometry.getEnvelope in JTS)
 
     bbox: function ( geom, _ignoreGeo /* Internal Use Only */ ) {
+      var result, wasGeodetic = false;
       if ( !geom ) {
         return undefined;
       } else if ( geom.bbox ) {
@@ -2494,11 +2860,10 @@ function try$( selector ) {
         var coordinates = this._allCoordinates( geom ),
             curCoord = 0;
 
-        if ( coordinates.length == 0 ) {
+        if ( coordinates.length === 0 ) {
           return undefined;
         }
 
-        var wasGeodetic = false;
         if ( !_ignoreGeo && $.geo.proj && this._isGeodetic( coordinates ) ) {
           wasGeodetic = true;
           coordinates = $.geo.proj.fromGeodetic( coordinates );
@@ -2547,7 +2912,7 @@ function try$( selector ) {
             c[1] += (coords[i - 1][1] + coords[j][1]) * n;
           }
 
-          if (a == 0) {
+          if (a === 0) {
             if (coords.length > 0) {
               c[0] = coords[0][0];
               c[1] = coords[0][1];
@@ -2589,7 +2954,7 @@ function try$( selector ) {
     },
 
     _containsPolygonPoint: function (polygonCoordinates, pointCoordinate) {
-      if (polygonCoordinates.length == 0 || polygonCoordinates[0].length < 4) {
+      if (polygonCoordinates.length === 0 || polygonCoordinates[0].length < 4) {
         return false;
       }
 
@@ -2701,7 +3066,7 @@ function try$( selector ) {
 
                 d = this._distanceSegmentPoint(abx, aby, apx, apy, bpx, bpy);
 
-            if (d == 0) {
+            if (d === 0) {
               return 0;
             }
 
@@ -2754,30 +3119,26 @@ function try$( selector ) {
         coords = $.geo.proj.fromGeodetic( geom.coordinates );
       }
 
-      switch ( geom.type ) {
-        case "Point":
-          var resultCoords = [],
-              slices = 180,
-              i = 0,
-              a;
+      if ( geom.type === "Point" ) {
+        var resultCoords = [],
+            slices = 180,
+            i = 0,
+            a;
 
-          for ( ; i <= slices; i++ ) {
-            a = ( i * 360 / slices ) * ( Math.PI / 180 );
-            resultCoords.push( [
-              coords[ 0 ] + Math.cos( a ) * distance,
-              coords[ 1 ] + Math.sin( a ) * distance
-            ] );
-          }
+        for ( ; i <= slices; i++ ) {
+          a = ( i * 360 / slices ) * ( Math.PI / 180 );
+          resultCoords.push( [
+            coords[ 0 ] + Math.cos( a ) * distance,
+            coords[ 1 ] + Math.sin( a ) * distance
+          ] );
+        }
 
-          return {
-            type: "Polygon",
-            coordinates: [ ( wasGeodetic ? $.geo.proj.toGeodetic( resultCoords ) : resultCoords ) ]
-          };
-
-          break;
-
-        default:
-          return undefined;
+        return {
+          type: "Polygon",
+          coordinates: [ ( wasGeodetic ? $.geo.proj.toGeodetic( resultCoords ) : resultCoords ) ]
+        };
+      } else {
+        return undefined;
       }
     },
 
@@ -2978,7 +3339,7 @@ function try$( selector ) {
         if (!(coordinates && coordinates.length)) {
           return "EMPTY";
         } else {
-          var points = []
+          var points = [];
 
           for (var i = 0; i < coordinates.length; i++) {
             points.push(coordinates[i].join(" "));
@@ -3079,7 +3440,7 @@ function try$( selector ) {
       }
 
       function pointParseUntagged(wkt) {
-        var pointString = wkt.match( /\(\s*([\d\.-]+)\s+([\d\.-]+)\s*\)/ );
+        var pointString = wkt.match( /\(\s*([\d\.\-]+)\s+([\d\.\-]+)\s*\)/ );
         return pointString && pointString.length > 2 ? {
           type: "Point",
           coordinates: [
@@ -3097,10 +3458,10 @@ function try$( selector ) {
             i = 0;
 
         if ( lineString.length > 1 ) {
-          pointStrings = lineString[ 1 ].match( /[\d\.-]+\s+[\d\.-]+/g );
+          pointStrings = lineString[ 1 ].match( /[\d\.\-]+\s+[\d\.\-]+/g );
 
           for ( ; i < pointStrings.length; i++ ) {
-            pointParts = pointStrings[ i ].match( /\s*([\d\.-]+)\s+([\d\.-]+)\s*/ );
+            pointParts = pointStrings[ i ].match( /\s*([\d\.\-]+)\s+([\d\.\-]+)\s*/ );
             coords[ i ] = [ parseFloat( pointParts[ 1 ] ), parseFloat( pointParts[ 2 ] ) ];
           }
 
@@ -3109,7 +3470,7 @@ function try$( selector ) {
             coordinates: coords
           };
         } else {
-          return null
+          return null;
         }
       }
 
@@ -3121,10 +3482,10 @@ function try$( selector ) {
             i = 0;
 
         if ( polygon.length > 1 ) {
-          pointStrings = polygon[ 1 ].match( /[\d\.-]+\s+[\d\.-]+/g );
+          pointStrings = polygon[ 1 ].match( /[\d\.\-]+\s+[\d\.\-]+/g );
 
           for ( ; i < pointStrings.length; i++ ) {
-            pointParts = pointStrings[ i ].match( /\s*([\d\.-]+)\s+([\d\.-]+)\s*/ );
+            pointParts = pointStrings[ i ].match( /\s*([\d\.\-]+)\s+([\d\.\-]+)\s*/ );
             coords[ i ] = [ parseFloat( pointParts[ 1 ] ), parseFloat( pointParts[ 2 ] ) ];
           }
 
@@ -3163,7 +3524,7 @@ function try$( selector ) {
 
         parse: parse
       };
-    })(),
+    }()),
 
     //
     // projection functions
@@ -3178,9 +3539,6 @@ function try$( selector ) {
 
       return {
         fromGeodeticPos: function (coordinate) {
-          if (!coordinate) {
-            debugger;
-          }
           return [
             semiMajorAxis * coordinate[ 0 ] * radiansPerDegree,
             semiMajorAxis * Math.log(Math.tan(quarterPi + coordinate[ 1 ] * radiansPerDegree / 2))
@@ -3280,23 +3638,25 @@ function try$( selector ) {
             return isMultiPolygon ? result : isMultiLineStringOrPolygon ? result[ 0 ] : isMultiPointOrLineString ? result[ 0 ][ 0 ] : result[ 0 ][ 0 ][ 0 ];
           }
         }
-      }
-    })(),
+      };
+    }()),
 
     //
     // service types (defined in other files)
     //
 
     _serviceTypes: {}
-  }
-})(jQuery, this);
-﻿(function ($, undefined) {
+  };
+}(jQuery, this));
 
-  var _ieVersion = (function () {
+(function ($, undefined) {
+  var _ieVersion = ( function () {
     var v = 5, div = document.createElement("div"), a = div.all || [];
-    while (div.innerHTML = "<!--[if gt IE " + (++v) + "]><br><![endif]-->", a[0]) { }
+    do {
+      div.innerHTML = "<!--[if gt IE " + (++v) + "]><br><![endif]-->";
+    } while ( a[0] );
     return v > 6 ? v : !v;
-  } ());
+  }() );
 
   $.widget("geo.geographics", {
     _$elem: undefined,
@@ -3308,6 +3668,10 @@ function try$( selector ) {
 
     _$canvas: undefined,
     _context: undefined,
+
+    _$blitcanvas: undefined,
+    _blitcontext: undefined,
+
     _$labelsContainer: undefined,
 
     options: {
@@ -3315,7 +3679,7 @@ function try$( selector ) {
         borderRadius: "8px",
         color: "#7f0000",
         //fill: undefined,
-        fillOpacity: .2,
+        fillOpacity: 0.2,
         height: "8px",
         opacity: 1,
         //stroke: undefined,
@@ -3342,8 +3706,8 @@ function try$( selector ) {
       this._height = this._$elem.height();
 
       if (!(this._width && this._height)) {
-        this._width = parseInt(this._$elem.css("width"));
-        this._height = parseInt(this._$elem.css("height"));
+        this._width = parseInt(this._$elem.css("width"), 10);
+        this._height = parseInt(this._$elem.css("height"), 10);
       }
 
       var posCss = 'position:absolute;left:0;top:0;margin:0;padding:0;',
@@ -3354,6 +3718,10 @@ function try$( selector ) {
         this._$elem.append('<canvas ' + sizeAttr + ' style="' + posCss + '"></canvas>');
         this._$canvas = this._$elem.children(':last');
         this._context = this._$canvas[0].getContext("2d");
+
+        this._$elem.append('<canvas ' + sizeAttr + ' style="' + posCss + ' visibility: hidden;"></canvas>');
+        this._$blitcanvas = this._$elem.children(':last');
+        this._blitcontext = this._$blitcanvas[0].getContext("2d");
       } else if (_ieVersion <= 8) {
         this._trueCanvas = false;
         this._$elem.append( '<div ' + sizeAttr + ' style="' + posCss + sizeCss + '"></div>');
@@ -3432,7 +3800,7 @@ function try$( selector ) {
     },
 
     drawPoint: function (coordinates, style) {
-      var style = this._getGraphicStyle(style);
+      style = this._getGraphicStyle(style);
       if (style.widthValue == style.heightValue && style.heightValue == style.borderRadiusValue) {
         this.drawArc(coordinates, 0, 360, style);
       } else if (style.visibility != "hidden" && style.opacity > 0) {
@@ -3474,7 +3842,100 @@ function try$( selector ) {
     },
 
     drawPolygon: function (coordinates, style) {
-      this._drawLines(coordinates, true, style);
+      if ( !this._trueCanvas || coordinates.length == 1 ) {
+        // either we don't have fancy rendering or there's no need for it (no holes)
+        this._drawLines( coordinates, true, style );
+      } else {
+        if ( !coordinates || !coordinates.length || coordinates[ 0 ].length < 3 ) {
+          // this is not a Polygon or it doesn't have a proper outer ring
+          return;
+        }
+
+        style = this._getGraphicStyle(style);
+
+        var pixelBbox, i, j;
+
+        if ( style.visibility != "hidden" && style.opacity > 0 ) {
+          this._blitcontext.clearRect(0, 0, this._width, this._height);
+
+          if ( style.doFill ) {
+            if ( coordinates.length > 1 ) {
+              // stencil inner rings
+              this._blitcontext.globalCompositeOperation = "source-out";
+              this._blitcontext.globalAlpha = 1;
+
+              for ( i = 1; i < coordinates.length; i++ ) {
+                this._blitcontext.beginPath();
+                this._blitcontext.moveTo( coordinates[ i ][ 0 ][ 0 ], coordinates[ i ][ 0 ][ 1 ] );
+                for ( j = 1; j < coordinates[ i ].length; j++ ) {
+                  this._blitcontext.lineTo( coordinates[ i ][ j ][ 0 ], coordinates[ i ][ j ][ 1 ] );
+                }
+                this._blitcontext.closePath();
+
+                this._blitcontext.fill( );
+              }
+            }
+          }
+
+          // path outer ring
+          this._blitcontext.beginPath();
+          this._blitcontext.moveTo( coordinates[ 0 ][ 0 ][ 0 ], coordinates[ 0 ][ 0 ][ 1 ] );
+
+          pixelBbox = [ coordinates[ 0 ][ 0 ][ 0 ] - style.strokeWidthValue, coordinates[ 0 ][ 0 ][ 1 ] - style.strokeWidthValue, coordinates[ 0 ][ 0 ][ 0 ] + style.strokeWidthValue, coordinates[ 0 ][ 0 ][ 1 ] + style.strokeWidthValue ];
+
+          for ( i = 1; i < coordinates[ 0 ].length - 1; i++ ) {
+            this._blitcontext.lineTo( coordinates[ 0 ][ i ][ 0 ], coordinates[ 0 ][ i ][ 1 ] );
+
+            pixelBbox[ 0 ] = Math.min( coordinates[ 0 ][ i ][ 0 ] - style.strokeWidthValue, pixelBbox[ 0 ] );
+            pixelBbox[ 1 ] = Math.min( coordinates[ 0 ][ i ][ 1 ] - style.strokeWidthValue, pixelBbox[ 1 ] );
+            pixelBbox[ 2 ] = Math.max( coordinates[ 0 ][ i ][ 0 ] + style.strokeWidthValue, pixelBbox[ 2 ] );
+            pixelBbox[ 3 ] = Math.max( coordinates[ 0 ][ i ][ 1 ] + style.strokeWidthValue, pixelBbox[ 3 ] );
+          }
+
+          this._blitcontext.closePath();
+
+          this._blitcontext.globalCompositeOperation = "source-out";
+          if ( style.doFill ) {
+            // fill outer ring
+            this._blitcontext.fillStyle = style.fill;
+            this._blitcontext.globalAlpha = style.opacity * style.fillOpacity;
+            this._blitcontext.fill( );
+          }
+
+          this._blitcontext.globalCompositeOperation = "source-over";
+          if ( style.doStroke ) {
+            // stroke outer ring
+            this._blitcontext.lineCap = this._blitcontext.lineJoin = "round";
+            this._blitcontext.lineWidth = style.strokeWidthValue;
+            this._blitcontext.strokeStyle = style.stroke;
+
+            this._blitcontext.globalAlpha = style.opacity * style.strokeOpacity;
+            this._blitcontext.stroke( );
+
+            if ( coordinates.length > 1 ) {
+              // stroke inner rings
+              for ( i = 1; i < coordinates.length; i++ ) {
+                this._blitcontext.beginPath();
+                this._blitcontext.moveTo( coordinates[ i ][ 0 ][ 0 ], coordinates[ i ][ 0 ][ 1 ] );
+                for ( j = 1; j < coordinates[ i ].length; j++ ) {
+                  this._blitcontext.lineTo( coordinates[ i ][ j ][ 0 ], coordinates[ i ][ j ][ 1 ] );
+                }
+                this._blitcontext.closePath();
+
+                this._blitcontext.stroke( );
+              }
+            }
+          }
+
+          // blit
+          pixelBbox[ 0 ] = Math.max( pixelBbox[ 0 ], 0 );
+          pixelBbox[ 1 ] = Math.max( pixelBbox[ 1 ], 0 );
+          pixelBbox[ 2 ] = Math.min( pixelBbox[ 2 ], this._width );
+          pixelBbox[ 3 ] = Math.min( pixelBbox[ 3 ], this._height );
+
+          this._context.drawImage(this._$blitcanvas[ 0 ], pixelBbox[ 0 ], pixelBbox[ 1 ], pixelBbox[ 2 ] - pixelBbox[ 0 ], pixelBbox[ 3 ] - pixelBbox[ 1 ], pixelBbox[ 0 ], pixelBbox[ 1 ], pixelBbox[ 2 ] - pixelBbox[ 0 ], pixelBbox[ 3 ] - pixelBbox[ 1 ] );
+        }
+      }
     },
 
     drawBbox: function (bbox, style) {
@@ -3496,8 +3957,8 @@ function try$( selector ) {
       this._height = this._$elem.height();
 
       if (!(this._width && this._height)) {
-        this._width = parseInt(this._$elem.css("width"));
-        this._height = parseInt(this._$elem.css("height"));
+        this._width = parseInt(this._$elem.css("width"), 10);
+        this._height = parseInt(this._$elem.css("height"), 10);
       }
 
       if ( this._trueCanvas ) {
@@ -3514,7 +3975,7 @@ function try$( selector ) {
 
     _getGraphicStyle: function (style) {
       function safeParse(value) {
-        value = parseInt(value);
+        value = parseInt(value, 10);
         return (+value + '') === value ? +value : value;
       }
 
@@ -3535,15 +3996,15 @@ function try$( selector ) {
         return;
       }
 
-      var style = this._getGraphicStyle(style),
-          i, j;
+      var i, j;
+      style = this._getGraphicStyle(style);
 
       if (style.visibility != "hidden" && style.opacity > 0) {
         this._context.beginPath();
-        this._context.moveTo(coordinates[0][0][0], coordinates[0][0][1]);
 
         for (i = 0; i < coordinates.length; i++) {
-          for (j = 0; j < coordinates[i].length; j++) {
+          this._context.moveTo(coordinates[i][0][0], coordinates[i][0][1]);
+          for (j = 1; j < coordinates[i].length; j++) {
             this._context.lineTo(coordinates[i][j][0], coordinates[i][j][1]);
           }
         }
@@ -3569,16 +4030,18 @@ function try$( selector ) {
       }
     }
   });
+}(jQuery));
 
 
-})(jQuery);
-
-﻿(function ($, undefined) {
-  var _ieVersion = (function () {
-    var v = 5, div = document.createElement("div"), a = div.all || [];
-    while (div.innerHTML = "<!--[if gt IE " + (++v) + "]><br><![endif]-->", a[0]) { }
-    return v > 6 ? v : !v;
-  } ()),
+(function ($, undefined) {
+  var _widgetIdSeed = 0,
+      _ieVersion = ( function () {
+        var v = 5, div = document.createElement("div"), a = div.all || [];
+        do {
+          div.innerHTML = "<!--[if gt IE " + (++v) + "]><br><![endif]-->";
+        } while ( a[0] );
+        return v > 6 ? v : !v;
+      }() ),
 
       _defaultOptions = {
         bbox: [-180, -85, 180, 85],
@@ -3588,6 +4051,7 @@ function try$( selector ) {
           "static": "default",
           pan: "url(data:image/vnd.microsoft.icon;base64,AAACAAEAICACAAgACAAwAQAAFgAAACgAAAAgAAAAQAAAAAEAAQAAAAAAAAEAAAAAAAAAAAAAAgAAAAAAAAAAAAAA////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8AAAA/AAAAfwAAAP+AAAH/gAAB/8AAA//AAAd/wAAGf+AAAH9gAADbYAAA2yAAAZsAAAGbAAAAGAAAAAAAAA//////////////////////////////////////////////////////////////////////////////////////gH///4B///8Af//+AD///AA///wAH//4AB//8AAf//AAD//5AA///gAP//4AD//8AF///AB///5A////5///8=), move",
           zoom: "crosshair",
+          dragBbox: "crosshair",
           drawPoint: "crosshair",
           drawLineString: "crosshair",
           drawPolygon: "crosshair",
@@ -3595,14 +4059,15 @@ function try$( selector ) {
           measureArea: "crosshair"
         },
         measureLabels: {
-          length: "{{=length.toFixed( 2 )}} m",
-          area: "{{=area.toFixed( 2 )}} sq m"
+          length: "{{:length.toFixed( 2 )}} m",
+          area: "{{:area.toFixed( 2 )}} sq m"
         },
         drawStyle: {},
         shapeStyle: {},
         mode: "pan",
         pannable: true,
         scroll: "default",
+        shift: "default",
         services: [
             {
               "class": "osm",
@@ -3630,6 +4095,9 @@ function try$( selector ) {
     _$elem: undefined, //< map div for maps, service div for services
     _map: undefined, //< only defined in services
     _created: false,
+    _widgetId: 0,
+    _tmplLengthId: "",
+    _tmplAreaId: "",
 
     _contentBounds: {},
 
@@ -3669,7 +4137,7 @@ function try$( selector ) {
     _mouseDown: undefined,
     _inOp: undefined,
     _toolPan: undefined,
-    _shiftZoom: undefined,
+    _shiftDown: undefined,
     _anchor: undefined,
     _current: undefined,
     _downDate: undefined,
@@ -3719,6 +4187,10 @@ function try$( selector ) {
         return;
       }
 
+      this._widgetId = _widgetIdSeed++;
+      this._tmplLengthId = "geoMeasureLength" + this._widgetId;
+      this._tmplAreaId = "geoMeasureArea" + this._widgetId;
+
       this._$elem.addClass("geo-map");
 
       this._initOptions = options || {};
@@ -3729,8 +4201,8 @@ function try$( selector ) {
 
       var size = this._findMapSize();
       this._contentBounds = {
-        x: parseInt(this._$elem.css("padding-left")),
-        y: parseInt(this._$elem.css("padding-top")),
+        x: parseInt(this._$elem.css("padding-left"), 10),
+        y: parseInt(this._$elem.css("padding-top"), 10),
         width: size["width"],
         height: size["height"]
       };
@@ -3744,7 +4216,7 @@ function try$( selector ) {
       this._mouseDown =
           this._inOp =
           this._toolPan =
-          this._shiftZoom =
+          this._shiftDown =
           this._panning =
           this._isTap =
           this._isDbltap = false;
@@ -3755,7 +4227,7 @@ function try$( selector ) {
       this._lastDrag = [ 0, 0 ];
       this._velocity = [ 0, 0 ];
 
-      this._friction = [.8, .8];
+      this._friction = [0.8, 0.8];
 
       this._downDate =
           this._moveDate =
@@ -3807,7 +4279,7 @@ function try$( selector ) {
         }
         geomap._resizeTimeout = setTimeout(function () {
           if (geomap._created) {
-            geomap._$elem.geomap("resize");
+            geomap._$elem.geomap( "resize", true );
           }
         }, 500);
       };
@@ -3839,8 +4311,8 @@ function try$( selector ) {
         }
       }
 
-      $.template( "geoMeasureLength", this._options[ "measureLabels" ].length );
-      $.template( "geoMeasureArea", this._options[ "measureLabels" ].area );
+      $.templates( this._tmplLengthId, this._options[ "measureLabels" ].length );
+      $.templates( this._tmplAreaId, this._options[ "measureLabels" ].area );
 
       this._$eventTarget.css("cursor", this._options["cursors"][this._options["mode"]]);
 
@@ -3883,8 +4355,11 @@ function try$( selector ) {
 
         case "measureLabels":
           value = $.extend( this._options[ "measureLabels" ], value );
-          $.template( "geoMeasureLength", value.length );
-          $.template( "geoMeasureArea", value.area );
+
+
+          $.templates( this._tmplLengthId, this._options[ "measureLabels" ].length );
+          $.templates( this._tmplAreaId, this._options[ "measureLabels" ].area );
+
           break;
 
         case "drawStyle":
@@ -3923,7 +4398,7 @@ function try$( selector ) {
           break;
 
         case "tilingScheme":
-          if ( value != null ) {
+          if ( value !== null ) {
             this._pixelSizeMax = this._getPixelSize( 0 );
             this._centerMax = [
               value.origin[ 0 ] + this._pixelSizeMax * value.tileWidth / 2,
@@ -4038,7 +4513,7 @@ function try$( selector ) {
     },
 
     zoom: function (numberOfLevels) {
-      if (numberOfLevels != null) {
+      if (numberOfLevels !== null) {
         this._setZoom(this._options["zoom"] + numberOfLevels, false, true);
       }
     },
@@ -4047,15 +4522,15 @@ function try$( selector ) {
       this._refresh();
     },
 
-    resize: function () {
+    resize: function ( _trigger /* Internal Use Only */ ) {
       var size = this._findMapSize(),
           dx = size["width"]/2 - this._contentBounds.width/2,
           dy = size["height"]/2 - this._contentBounds.height/2,
           i;
 
       this._contentBounds = {
-        x: parseInt(this._$elem.css("padding-left")),
-        y: parseInt(this._$elem.css("padding-top")),
+        x: parseInt(this._$elem.css("padding-left"), 10),
+        y: parseInt(this._$elem.css("padding-top"), 10),
         width: size["width"],
         height: size["height"]
       };
@@ -4079,7 +4554,7 @@ function try$( selector ) {
         this._drawPixels[i][1] += dy;
       }
 
-      this._setCenterAndSize(this._center, this._pixelSize, false, true);
+      this._setCenterAndSize(this._center, this._pixelSize, _trigger, true);
     },
 
     append: function ( shape, style, label, refresh ) {
@@ -4265,7 +4740,7 @@ function try$( selector ) {
       // calculate the internal zoom level, vs. public zoom property
       var tilingScheme = this._options["tilingScheme"];
       if ( tilingScheme ) {
-        if ( tilingScheme.pixelSizes != null ) {
+        if ( tilingScheme.pixelSizes ) {
           var roundedPixelSize = Math.floor(pixelSize * 1000),
               levels = tilingScheme.pixelSizes.length,
               i = levels - 1;
@@ -4296,11 +4771,11 @@ function try$( selector ) {
     },
 
     _createChildren: function () {
-      this._$existingChildren = this._$elem.children().detach();
+      this._$existingChildren = this._$elem.children();
 
       this._forcePosition(this._$existingChildren);
 
-      this._$existingChildren.css("-moz-user-select", "none");
+      this._$existingChildren.detach().css("-moz-user-select", "none");
 
       var contentSizeCss = "width:" + this._contentBounds["width"] + "px; height:" + this._contentBounds["height"] + "px; margin:0; padding:0;",
           contentPosCss = "position:absolute; left:0; top:0;";
@@ -4400,7 +4875,7 @@ function try$( selector ) {
               type: "LineString",
               coordinates: coords
             };
-            label = $.render( { length: $.geo.length( labelShape, true ) }, "geoMeasureLength" );
+            label = $.render[ this._tmplLengthId ]( { length: $.geo.length( labelShape, true ) } );
             labelPixel = $.merge( [], pixels[ pixels.length - 1 ] );
             break;
 
@@ -4413,7 +4888,7 @@ function try$( selector ) {
             };
             labelShape.coordinates[ 0 ].push( coords[ 0 ] );
 
-            label = $.render( { area: $.geo.area( labelShape, true ) }, "geoMeasureArea" );
+            label = $.render[ this._tmplAreaId ]( { area: $.geo.area( labelShape, true ) } );
             labelPixel = $.merge( [], pixels[ pixels.length - 1 ] );
             pixels = [ pixels ];
             break;
@@ -4486,7 +4961,7 @@ function try$( selector ) {
           case "LineString":
             this._$shapesContainer.geographics("drawLineString", this._map.toPixel(shape.coordinates, center, pixelSize), style);
             if ( hasLabel ) {
-              labelPixel = this._map.toPixel( $.geo.pointAlong( shape, .5 ).coordinates, center, pixelSize );
+              labelPixel = this._map.toPixel( $.geo.pointAlong( shape, 0.5 ).coordinates, center, pixelSize );
             }
             break;
           case "Polygon":
@@ -4540,7 +5015,7 @@ function try$( selector ) {
       while (sizeContainer.size() && !(size["width"] > 0 && size["height"] > 0)) {
         size = { width: sizeContainer.width(), height: sizeContainer.height() };
         if (size["width"] <= 0 || size["height"] <= 0) {
-          size = { width: parseInt(sizeContainer.css("width")), height: parseInt(sizeContainer.css("height")) };
+          size = { width: parseInt(sizeContainer.css("width"), 10), height: parseInt(sizeContainer.css("height"), 10) };
         }
         sizeContainer = sizeContainer.parent();
       }
@@ -4556,17 +5031,17 @@ function try$( selector ) {
 
     _getPixelSize: function ( zoom ) {
       var tilingScheme = this._options["tilingScheme"];
-      if (tilingScheme != null) {
+      if (tilingScheme !== null) {
         if (zoom === 0) {
-          return tilingScheme.pixelSizes != null ? tilingScheme.pixelSizes[0] : tilingScheme.basePixelSize;
+          return tilingScheme.pixelSizes ? tilingScheme.pixelSizes[0] : tilingScheme.basePixelSize;
         }
 
         zoom = Math.round(zoom);
         zoom = Math.max(zoom, 0);
-        var levels = tilingScheme.pixelSizes != null ? tilingScheme.pixelSizes.length : tilingScheme.levels;
+        var levels = tilingScheme.pixelSizes ? tilingScheme.pixelSizes.length : tilingScheme.levels;
         zoom = Math.min(zoom, levels - 1);
 
-        if (tilingScheme.pixelSizes != null) {
+        if ( tilingScheme.pixelSizes ) {
           return tilingScheme.pixelSizes[zoom];
         } else {
           return tilingScheme.basePixelSize / Math.pow(2, zoom);
@@ -4602,16 +5077,16 @@ function try$( selector ) {
       return { pixelSize: pixelSize, center: scaleCenter };
     },
 
-    _mouseWheelFinish: function () {
+    _mouseWheelFinish: function ( refresh ) {
       this._wheelTimeout = null;
 
-      if (this._wheelLevel != 0) {
-        var wheelCenterAndSize = this._getZoomCenterAndSize( this._anchor, this._wheelLevel, this._options[ "tilingScheme" ] != null );
+      if (this._wheelLevel !== 0) {
+        var wheelCenterAndSize = this._getZoomCenterAndSize( this._anchor, this._wheelLevel, this._options[ "tilingScheme" ] !== null );
 
         this._setCenterAndSize(wheelCenterAndSize.center, wheelCenterAndSize.pixelSize, true, true);
 
         this._wheelLevel = 0;
-      } else {
+      } else if ( refresh ) {
         this._refresh();
       }
     },
@@ -4680,16 +5155,16 @@ function try$( selector ) {
           this._velocity = [dx, dy];
         }
 
-        if (dx != 0 || dy != 0) {
+        if (dx !== 0 || dy !== 0) {
           this._panning = true;
           this._lastDrag = this._current;
 
           translateObj = {
             left: function (index, value) {
-              return parseInt(value) + dx;
+              return parseInt(value, 10) + dx;
             },
             top: function (index, value) {
-              return parseInt(value) + dy;
+              return parseInt(value, 10) + dy;
             }
           };
 
@@ -4917,6 +5392,7 @@ function try$( selector ) {
 
       switch (this._options["mode"]) {
         case "drawLineString":
+        case "measureLength":
           if ( this._drawCoords.length > 1 && ! ( this._drawCoords[0][0] == this._drawCoords[1][0] &&
                                                   this._drawCoords[0][1] == this._drawCoords[1][1] ) ) {
               this._drawCoords.length--;
@@ -4931,6 +5407,7 @@ function try$( selector ) {
           break;
 
         case "drawPolygon":
+        case "measureArea":
           if ( this._drawCoords.length > 1 && ! ( this._drawCoords[0][0] == this._drawCoords[1][0] &&
                                                   this._drawCoords[0][1] == this._drawCoords[1][1] ) ) {
             var endIndex = this._drawCoords.length - 1;
@@ -4947,11 +5424,6 @@ function try$( selector ) {
           this._resetDrawing();
           break;
 
-        case "measureLength":
-        case "measureArea":
-          this._resetDrawing();
-          break;
-
         default:
           this._eventTarget_dblclick_zoom(e);
           break;
@@ -4961,7 +5433,10 @@ function try$( selector ) {
     },
 
     _eventTarget_touchstart: function (e) {
-      if ( this._options[ "mode" ] === "static" ) {
+      var mode = this._options[ "mode" ],
+          shift = this._options[ "shift" ];
+
+      if ( mode === "static" ) {
         return;
       }
 
@@ -4970,7 +5445,7 @@ function try$( selector ) {
       }
 
       this._panFinalize();
-      this._mouseWheelFinish();
+      this._mouseWheelFinish( false );
 
       var offset = $(e.currentTarget).offset(),
           touches = e.originalEvent.changedTouches;
@@ -5034,24 +5509,18 @@ function try$( selector ) {
       this._mouseDown = true;
       this._anchor = $.merge( [ ], this._current );
 
-      if (!this._inOp && e.shiftKey) {
-        this._shiftZoom = true;
-        this._$eventTarget.css("cursor", this._options["cursors"]["zoom"]);
-      } else if ( !this._isMultiTouch && this._options[ "pannable" ] ) {
+      if (!this._inOp && e.shiftKey && shift !== "off") {
+        this._shiftDown = true;
+        this._$eventTarget.css( "cursor", this._options[ "cursors" ][ shift === "default" ? "zoom" : shift ] );
+      } else if ( !this._isMultiTouch && ( this._options[ "pannable" ] || mode === "dragBbox" ) ) {
         this._inOp = true;
 
-        switch (this._options["mode"]) {
-          case "zoom":
-            break;
+        if ( mode !== "zoom" && mode !== "dragBbox" ) {
+          this._lastDrag = this._current;
 
-          default:
-            this._lastDrag = this._current;
-
-            if (e.currentTarget.setCapture) {
-              e.currentTarget.setCapture();
-            }
-
-            break;
+          if (e.currentTarget.setCapture) {
+            e.currentTarget.setCapture();
+          }
         }
       }
 
@@ -5166,10 +5635,12 @@ function try$( selector ) {
         return false;
       }
 
-      var mode = this._shiftZoom ? "zoom" : this._options["mode"];
+      var shift = this._options[ "shift" ],
+          mode = this._shiftDown ? ( shift === "default" ? "zoom" : shift ) : this._options["mode"];
 
       switch (mode) {
         case "zoom":
+        case "dragBbox":
           if ( this._mouseDown ) {
             this._$drawContainer.geographics( "clear" );
             this._$drawContainer.geographics( "drawBbox", [
@@ -5232,7 +5703,8 @@ function try$( selector ) {
       var mouseWasDown = this._mouseDown,
           wasToolPan = this._toolPan,
           offset = this._$eventTarget.offset(),
-          mode = this._shiftZoom ? "zoom" : this._options["mode"],
+          shift = this._options[ "shift" ],
+          mode = this._shiftDown ? ( shift === "default" ? "zoom" : shift ) : this._options["mode"],
           current, i, clickDate,
           dx, dy;
 
@@ -5244,10 +5716,9 @@ function try$( selector ) {
 
       if (this._softDblClick) {
         if (this._isTap) {
-          var dx = current[0] - this._anchor[0],
-              dy = current[1] - this._anchor[1],
-              distance = Math.sqrt((dx * dx) + (dy * dy));
-          if (distance <= 8) {
+          dx = current[0] - this._anchor[0];
+          dy = current[1] - this._anchor[1];
+          if (Math.sqrt((dx * dx) + (dy * dy)) <= 8) {
             current = $.merge( [ ], this._anchor );
           }
         }
@@ -5258,7 +5729,7 @@ function try$( selector ) {
 
       this._$eventTarget.css("cursor", this._options["cursors"][this._options["mode"]]);
 
-      this._shiftZoom = this._mouseDown = this._toolPan = false;
+      this._shiftDown = this._mouseDown = this._toolPan = false;
 
       if ( this._isMultiTouch ) {
         e.preventDefault( );
@@ -5281,9 +5752,10 @@ function try$( selector ) {
         clickDate = $.now();
         this._current = current;
 
-        switch (mode) {
+        switch ( mode ) {
           case "zoom":
-            if ( dx > 0 || dy > 0 ) {
+          case "dragBbox":
+            if ( dx !== 0 || dy !== 0 ) {
               var minSize = this._pixelSize * 6,
                   bboxCoords = this._toMap( [ [
                       Math.min( this._anchor[ 0 ], current[ 0 ] ),
@@ -5298,13 +5770,22 @@ function try$( selector ) {
                     bboxCoords[0][1],
                     bboxCoords[1][0],
                     bboxCoords[1][1]
-                  ];
+                  ],
+                  polygon;
 
-              if ( ( bbox[2] - bbox[0] ) < minSize && ( bbox[3] - bbox[1] ) < minSize ) {
-                bbox = $.geo.scaleBy( this._getBbox( $.geo.center( bbox, true ) ), .5, true );
+              if ( mode === "zoom" ) {
+                if ( ( bbox[2] - bbox[0] ) < minSize && ( bbox[3] - bbox[1] ) < minSize ) {
+                  bbox = $.geo.scaleBy( this._getBbox( $.geo.center( bbox, true ) ), 0.5, true );
+                }
+
+                this._setBbox(bbox, true, true);
+              } else {
+                polygon = $.geo.polygonize( bbox, true );
+                this._trigger( "shape", e, this._userGeodetic ? {
+                  type: "Polygon",
+                  coordinates: $.geo.proj.toGeodetic( polygon.coordinates )
+                } : polygon );
               }
-
-              this._setBbox(bbox, true, true);
             }
 
             this._resetDrawing();
@@ -5339,7 +5820,7 @@ function try$( selector ) {
             if (wasToolPan) {
               this._panFinalize();
             } else {
-              i = (this._drawCoords.length == 0 ? 0 : this._drawCoords.length - 1);
+              i = (this._drawCoords.length === 0 ? 0 : this._drawCoords.length - 1);
 
               this._drawCoords[i] = this._toMap(current);
               this._drawPixels[i] = current;
@@ -5393,7 +5874,7 @@ function try$( selector ) {
         return false;
       }
 
-      if (delta != 0) {
+      if (delta !== 0) {
         if (this._wheelTimeout) {
           window.clearTimeout(this._wheelTimeout);
           this._wheelTimeout = null;
@@ -5404,7 +5885,7 @@ function try$( selector ) {
 
         this._wheelLevel += delta;
 
-        var wheelCenterAndSize = this._getZoomCenterAndSize( this._anchor, this._wheelLevel, this._options[ "tilingScheme" ] != null ),
+        var wheelCenterAndSize = this._getZoomCenterAndSize( this._anchor, this._wheelLevel, this._options[ "tilingScheme" ] !== null ),
             service,
             i = 0;
 
@@ -5426,7 +5907,7 @@ function try$( selector ) {
 
         var geomap = this;
         this._wheelTimeout = window.setTimeout(function () {
-          geomap._mouseWheelFinish();
+          geomap._mouseWheelFinish( true );
         }, 1000);
       }
 
@@ -5434,9 +5915,10 @@ function try$( selector ) {
     }
   }
   );
-})(jQuery);
+}(jQuery));
 
-﻿(function ($, undefined) {
+
+(function ($, undefined) {
   $.geo._serviceTypes.tiled = (function () {
     return {
       create: function (map, serviceContainer, service, index) {
@@ -5478,10 +5960,10 @@ function try$( selector ) {
             webkitTransition: "",
             transition: "",
             left: function ( index, value ) {
-              return parseInt( value ) + dx;
+              return parseInt( value, 10 ) + dx;
             },
             top: function ( index, value ) {
-              return parseInt( value ) + dy;
+              return parseInt( value, 10 ) + dy;
             }
           });
 
@@ -5510,8 +5992,8 @@ function try$( selector ) {
 
                 currentPosition = scaleContainer.position(),
                 scaleOriginParts = scaleContainer.data("scaleOrigin").split(","),
-                totalDx = parseInt(scaleOriginParts[0]) - currentPosition.left,
-                totalDy = parseInt(scaleOriginParts[1]) - currentPosition.top,
+                totalDx = parseInt(scaleOriginParts[0], 10) - currentPosition.left,
+                totalDy = parseInt(scaleOriginParts[1], 10) - currentPosition.top,
 
                 mapCenterOriginal = map._getCenter(),
                 mapCenter = [
@@ -5540,7 +6022,18 @@ function try$( selector ) {
 
                 opacity = service.style.opacity,
 
-                x, y;
+                x, y,
+
+                loadImageDeferredDone = function( url ) {
+                  // when a Deferred call is done, add the image to the map
+                  // a reference to the correct img element is on the Deferred object itself
+                  serviceObj._loadImage( $.data( this, "img" ), url, pixelSize, serviceState, serviceContainer, opacity );
+                },
+
+                loadImageDeferredFail = function( ) {
+                  $.data( this, "img" ).remove( );
+                  serviceState.loadCount--;
+                };
 
             for ( x = tileX; x < tileX2; x++ ) {
               for ( y = tileY; y < tileY2; y++ ) {
@@ -5579,8 +6072,8 @@ function try$( selector ) {
                   if ( isFunc ) {
                     imageUrl = service[ urlProp ]( urlArgs );
                   } else {
-                    $.template( "geoSrc", service[ urlProp ] );
-                    imageUrl = $.render( urlArgs, "geoSrc" );
+                    $.templates( "geoSrc", service[ urlProp ] );
+                    imageUrl = $.render[ "geoSrc" ]( urlArgs );
                   }
                   /* end same as refresh 3 */
 
@@ -5607,14 +6100,12 @@ function try$( selector ) {
 
                   if ( typeof imageUrl === "string" ) {
                     serviceObj._loadImage( $img, imageUrl, pixelSize, serviceState, serviceContainer, opacity );
-                  } else {
+                  } else if ( imageUrl ) {
                     // assume Deferred
-                    imageUrl.done( function( url ) {
-                      serviceObj._loadImage( $img, url, pixelSize, serviceState, serviceContainer, opacity );
-                    } ).fail( function( ) {
-                      $img.remove( );
-                      serviceState.loadCount--;
-                    } );
+                    $.data( imageUrl, "img", $img );
+                    imageUrl.done( loadImageDeferredDone ).fail( loadImageDeferredFail );
+                  } else {
+                    $img.remove( );
                   }
 
                   /* end same as refresh 4 */
@@ -5714,7 +6205,18 @@ function try$( selector ) {
 
               opacity = service.style.opacity,
 
-              x, y;
+              x, y,
+
+              loadImageDeferredDone = function( url ) {
+                // when a Deferred call is done, add the image to the map
+                // a reference to the correct img element is on the Deferred object itself
+                serviceObj._loadImage( $.data( this, "img" ), url, pixelSize, serviceState, $serviceContainer, opacity );
+              },
+
+              loadImageDeferredFail = function( ) {
+                $.data( this, "img" ).remove( );
+                serviceState.loadCount--;
+              };
 
           if (serviceState.reloadTiles) {
             scaleContainers.find("img").attr("data-dirty", "true");
@@ -5735,8 +6237,8 @@ function try$( selector ) {
               tile = $img.attr("data-tile").split(",");
 
               $img.css({
-                left: Math.round(((parseInt(tile[0]) - fullXAtScale) * 100) + (serviceLeft - (serviceLeft % tileWidth)) / tileWidth * 100) + "%",
-                top: Math.round(((parseInt(tile[1]) - fullYAtScale) * 100) + (serviceTop - (serviceTop % tileHeight)) / tileHeight * 100) + "%"
+                left: Math.round(((parseInt(tile[0], 10) - fullXAtScale) * 100) + (serviceLeft - (serviceLeft % tileWidth)) / tileWidth * 100) + "%",
+                top: Math.round(((parseInt(tile[1], 10) - fullYAtScale) * 100) + (serviceTop - (serviceTop % tileHeight)) / tileHeight * 100) + "%"
               });
 
               if (opacity < 1) {
@@ -5781,8 +6283,8 @@ function try$( selector ) {
                 if ( isFunc ) {
                   imageUrl = service[ urlProp ]( urlArgs );
                 } else {
-                  $.template( "geoSrc", service[ urlProp ] );
-                  imageUrl = $.render( urlArgs, "geoSrc" );
+                  $.templates( "geoSrc", service[ urlProp ] );
+                  imageUrl = $.render[ "geoSrc" ]( urlArgs );
                 }
 
                 serviceState.loadCount++;
@@ -5807,14 +6309,12 @@ function try$( selector ) {
 
                 if ( typeof imageUrl === "string" ) {
                   serviceObj._loadImage( $img, imageUrl, pixelSize, serviceState, $serviceContainer, opacity );
-                } else {
+                } else if ( imageUrl ) {
                   // assume Deferred
-                  imageUrl.done( function( url ) {
-                    serviceObj._loadImage( $img, url, pixelSize, serviceState, $serviceContainer, opacity );
-                  } ).fail( function( ) {
-                    $img.remove( );
-                    serviceState.loadCount--;
-                  } );
+                  $.data( imageUrl, "img", $img );
+                  imageUrl.done( loadImageDeferredDone ).fail( loadImageDeferredFail );
+                } else {
+                  $img.remove( );
                 }
               }
             }
@@ -5874,9 +6374,10 @@ function try$( selector ) {
         }).attr("src", url);
       }
     };
-  })();
-})(jQuery);
-﻿(function ($, undefined) {
+  }());
+}(jQuery));
+
+(function ($, undefined) {
   $.geo._serviceTypes.shingled = (function () {
     return {
       create: function (map, serviceContainer, service, index) {
@@ -5924,10 +6425,10 @@ function try$( selector ) {
 
           panContainer.css( {
             left: function (index, value) {
-              return parseInt(value) + dx;
+              return parseInt(value, 10) + dx;
             },
             top: function (index, value) {
-              return parseInt(value) + dy;
+              return parseInt(value, 10) + dy;
             }
           } );
 
@@ -6033,8 +6534,8 @@ function try$( selector ) {
           if ( isFunc ) {
             imageUrl = service[ urlProp ]( urlArgs );
           } else {
-            $.template( "geoSrc", service[ urlProp ] );
-            imageUrl = $.render( urlArgs, "geoSrc" );
+            $.templates( "geoSrc", service[ urlProp ] );
+            imageUrl = $.render[ "geoSrc" ]( urlArgs );
           }
 
           serviceState.loadCount++;
@@ -6123,8 +6624,8 @@ function try$( selector ) {
 
               panContainer.children("img").each(function (i) {
                 var $thisimg = $(this),
-                    x = panContainerPos.left + parseInt($thisimg.css("left")),
-                    y = panContainerPos.top + parseInt($thisimg.css("top"));
+                    x = panContainerPos.left + parseInt($thisimg.css("left"), 10),
+                    y = panContainerPos.top + parseInt($thisimg.css("top"), 10);
 
                 $thisimg.css({ left: x + "px", top: y + "px" });
               }).unwrap();
@@ -6144,90 +6645,6 @@ function try$( selector ) {
           }
         }).attr("src", url);
       }
-    }
-  })();
-})(jQuery);
-/*! Copyright (c) 2011 Brandon Aaron (http://brandonaaron.net)
- * Licensed under the MIT License (LICENSE.txt).
- *
- * Thanks to: http://adomas.org/javascript-mouse-wheel/ for some pointers.
- * Thanks to: Mathias Bank(http://www.mathias-bank.de) for a scope bug fix.
- * Thanks to: Seamus Leahy for adding deltaX and deltaY
- *
- * Version: 3.0.6
- * 
- * Requires: 1.2.2+
- */
-
-(function($) {
-
-var types = ['DOMMouseScroll', 'mousewheel'];
-
-if ($.event.fixHooks) {
-    for ( var i=types.length; i; ) {
-        $.event.fixHooks[ types[--i] ] = $.event.mouseHooks;
-    }
-}
-
-$.event.special.mousewheel = {
-    setup: function() {
-        if ( this.addEventListener ) {
-            for ( var i=types.length; i; ) {
-                this.addEventListener( types[--i], handler, false );
-            }
-        } else {
-            this.onmousewheel = handler;
-        }
-    },
-    
-    teardown: function() {
-        if ( this.removeEventListener ) {
-            for ( var i=types.length; i; ) {
-                this.removeEventListener( types[--i], handler, false );
-            }
-        } else {
-            this.onmousewheel = null;
-        }
-    }
-};
-
-$.fn.extend({
-    mousewheel: function(fn) {
-        return fn ? this.bind("mousewheel", fn) : this.trigger("mousewheel");
-    },
-    
-    unmousewheel: function(fn) {
-        return this.unbind("mousewheel", fn);
-    }
-});
-
-
-function handler(event) {
-    var orgEvent = event || window.event, args = [].slice.call( arguments, 1 ), delta = 0, returnValue = true, deltaX = 0, deltaY = 0;
-    event = $.event.fix(orgEvent);
-    event.type = "mousewheel";
-    
-    // Old school scrollwheel delta
-    if ( orgEvent.wheelDelta ) { delta = orgEvent.wheelDelta/120; }
-    if ( orgEvent.detail     ) { delta = -orgEvent.detail/3; }
-    
-    // New school multidimensional scroll (touchpads) deltas
-    deltaY = delta;
-    
-    // Gecko
-    if ( orgEvent.axis !== undefined && orgEvent.axis === orgEvent.HORIZONTAL_AXIS ) {
-        deltaY = 0;
-        deltaX = -1*delta;
-    }
-    
-    // Webkit
-    if ( orgEvent.wheelDeltaY !== undefined ) { deltaY = orgEvent.wheelDeltaY/120; }
-    if ( orgEvent.wheelDeltaX !== undefined ) { deltaX = -1*orgEvent.wheelDeltaX/120; }
-    
-    // Add event and delta to the front of the arguments
-    args.unshift(event, delta, deltaX, deltaY);
-    
-    return ($.event.dispatch || $.event.handle).apply(this, args);
-}
-
-})(jQuery);
+    };
+  }());
+}(jQuery));

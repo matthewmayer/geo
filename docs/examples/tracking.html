@@ -33,7 +33,7 @@
     </div>
   </div>
   <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js"></script>
-  <script src="http://code.jquerygeo.com/jquery.geo-1.0a4.min.js"></script>
+  <script src="../jquery.geo-test.min.js"></script>
   <script>
     $(function () {
       var map = null;
@@ -45,7 +45,7 @@
           services: [
             {
               type: "tiled",
-              src: "http://services.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{{=zoom}}/{{=tile.row}}/{{=tile.column}}",
+              src: "http://services.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{{:zoom}}/{{:tile.row}}/{{:tile.column}}",
               attr: "&copy; Esri"
             }
           ]

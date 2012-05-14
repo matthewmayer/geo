@@ -1,4 +1,4 @@
-﻿(function ($, window, undefined) {
+(function ($, window, undefined) {
   var pos_oo = Number.POSITIVE_INFINITY,
       neg_oo = Number.NEGATIVE_INFINITY;
 
@@ -106,6 +106,28 @@
              bbox2[ 3 ] < bbox1[ 1 ];
     },
 
+    polygonize: function( bbox, _ignoreGeo /* Internal Use Only */ ) {
+      // adaptation of Polygonizer class in JTS for use with bboxes
+      var wasGeodetic = false;
+      if ( !_ignoreGeo && $.geo.proj && this._isGeodetic( bbox ) ) {
+        wasGeodetic = true;
+        bbox = $.geo.proj.fromGeodetic(bbox);
+      }
+
+      var polygon = {
+        type: "Polygon",
+        coordinates: [ [
+          [ bbox[ 0 ], bbox[ 1 ] ],
+          [ bbox[ 0 ], bbox[ 3 ] ],
+          [ bbox[ 2 ], bbox[ 3 ] ],
+          [ bbox[ 2 ], bbox[ 1 ] ],
+          [ bbox[ 0 ], bbox[ 1 ] ]
+        ] ]
+      };
+
+      return wasGeodetic ? $.geo.proj.toGeodetic(polygon) : polygon;
+    },
+
     reaspect: function (bbox, ratio, _ignoreGeo /* Internal Use Only */ ) {
       // not in JTS
       var wasGeodetic = false;
@@ -119,7 +141,7 @@
           center = this.center(bbox, true),
           dx, dy;
 
-      if (width != 0 && height != 0 && ratio > 0) {
+      if (width !== 0 && height !== 0 && ratio > 0) {
         if (width / height > ratio) {
           dx = width / 2;
           dy = dx / ratio;
@@ -193,6 +215,7 @@
     // bbox (Geometry.getEnvelope in JTS)
 
     bbox: function ( geom, _ignoreGeo /* Internal Use Only */ ) {
+      var result, wasGeodetic = false;
       if ( !geom ) {
         return undefined;
       } else if ( geom.bbox ) {
@@ -203,11 +226,10 @@
         var coordinates = this._allCoordinates( geom ),
             curCoord = 0;
 
-        if ( coordinates.length == 0 ) {
+        if ( coordinates.length === 0 ) {
           return undefined;
         }
 
-        var wasGeodetic = false;
         if ( !_ignoreGeo && $.geo.proj && this._isGeodetic( coordinates ) ) {
           wasGeodetic = true;
           coordinates = $.geo.proj.fromGeodetic( coordinates );
@@ -256,7 +278,7 @@
             c[1] += (coords[i - 1][1] + coords[j][1]) * n;
           }
 
-          if (a == 0) {
+          if (a === 0) {
             if (coords.length > 0) {
               c[0] = coords[0][0];
               c[1] = coords[0][1];
@@ -298,7 +320,7 @@
     },
 
     _containsPolygonPoint: function (polygonCoordinates, pointCoordinate) {
-      if (polygonCoordinates.length == 0 || polygonCoordinates[0].length < 4) {
+      if (polygonCoordinates.length === 0 || polygonCoordinates[0].length < 4) {
         return false;
       }
 
@@ -410,7 +432,7 @@
 
                 d = this._distanceSegmentPoint(abx, aby, apx, apy, bpx, bpy);
 
-            if (d == 0) {
+            if (d === 0) {
               return 0;
             }
 
@@ -463,30 +485,26 @@
         coords = $.geo.proj.fromGeodetic( geom.coordinates );
       }
 
-      switch ( geom.type ) {
-        case "Point":
-          var resultCoords = [],
-              slices = 180,
-              i = 0,
-              a;
+      if ( geom.type === "Point" ) {
+        var resultCoords = [],
+            slices = 180,
+            i = 0,
+            a;
 
-          for ( ; i <= slices; i++ ) {
-            a = ( i * 360 / slices ) * ( Math.PI / 180 );
-            resultCoords.push( [
-              coords[ 0 ] + Math.cos( a ) * distance,
-              coords[ 1 ] + Math.sin( a ) * distance
-            ] );
-          }
+        for ( ; i <= slices; i++ ) {
+          a = ( i * 360 / slices ) * ( Math.PI / 180 );
+          resultCoords.push( [
+            coords[ 0 ] + Math.cos( a ) * distance,
+            coords[ 1 ] + Math.sin( a ) * distance
+          ] );
+        }
 
-          return {
-            type: "Polygon",
-            coordinates: [ ( wasGeodetic ? $.geo.proj.toGeodetic( resultCoords ) : resultCoords ) ]
-          };
-
-          break;
-
-        default:
-          return undefined;
+        return {
+          type: "Polygon",
+          coordinates: [ ( wasGeodetic ? $.geo.proj.toGeodetic( resultCoords ) : resultCoords ) ]
+        };
+      } else {
+        return undefined;
       }
     },
 
@@ -687,7 +705,7 @@
         if (!(coordinates && coordinates.length)) {
           return "EMPTY";
         } else {
-          var points = []
+          var points = [];
 
           for (var i = 0; i < coordinates.length; i++) {
             points.push(coordinates[i].join(" "));
@@ -788,7 +806,7 @@
       }
 
       function pointParseUntagged(wkt) {
-        var pointString = wkt.match( /\(\s*([\d\.-]+)\s+([\d\.-]+)\s*\)/ );
+        var pointString = wkt.match( /\(\s*([\d\.\-]+)\s+([\d\.\-]+)\s*\)/ );
         return pointString && pointString.length > 2 ? {
           type: "Point",
           coordinates: [
@@ -806,10 +824,10 @@
             i = 0;
 
         if ( lineString.length > 1 ) {
-          pointStrings = lineString[ 1 ].match( /[\d\.-]+\s+[\d\.-]+/g );
+          pointStrings = lineString[ 1 ].match( /[\d\.\-]+\s+[\d\.\-]+/g );
 
           for ( ; i < pointStrings.length; i++ ) {
-            pointParts = pointStrings[ i ].match( /\s*([\d\.-]+)\s+([\d\.-]+)\s*/ );
+            pointParts = pointStrings[ i ].match( /\s*([\d\.\-]+)\s+([\d\.\-]+)\s*/ );
             coords[ i ] = [ parseFloat( pointParts[ 1 ] ), parseFloat( pointParts[ 2 ] ) ];
           }
 
@@ -818,7 +836,7 @@
             coordinates: coords
           };
         } else {
-          return null
+          return null;
         }
       }
 
@@ -830,10 +848,10 @@
             i = 0;
 
         if ( polygon.length > 1 ) {
-          pointStrings = polygon[ 1 ].match( /[\d\.-]+\s+[\d\.-]+/g );
+          pointStrings = polygon[ 1 ].match( /[\d\.\-]+\s+[\d\.\-]+/g );
 
           for ( ; i < pointStrings.length; i++ ) {
-            pointParts = pointStrings[ i ].match( /\s*([\d\.-]+)\s+([\d\.-]+)\s*/ );
+            pointParts = pointStrings[ i ].match( /\s*([\d\.\-]+)\s+([\d\.\-]+)\s*/ );
             coords[ i ] = [ parseFloat( pointParts[ 1 ] ), parseFloat( pointParts[ 2 ] ) ];
           }
 
@@ -872,7 +890,7 @@
 
         parse: parse
       };
-    })(),
+    }()),
 
     //
     // projection functions
@@ -887,9 +905,6 @@
 
       return {
         fromGeodeticPos: function (coordinate) {
-          if (!coordinate) {
-            debugger;
-          }
           return [
             semiMajorAxis * coordinate[ 0 ] * radiansPerDegree,
             semiMajorAxis * Math.log(Math.tan(quarterPi + coordinate[ 1 ] * radiansPerDegree / 2))
@@ -989,13 +1004,13 @@
             return isMultiPolygon ? result : isMultiLineStringOrPolygon ? result[ 0 ] : isMultiPointOrLineString ? result[ 0 ][ 0 ] : result[ 0 ][ 0 ][ 0 ];
           }
         }
-      }
-    })(),
+      };
+    }()),
 
     //
     // service types (defined in other files)
     //
 
     _serviceTypes: {}
-  }
-})(jQuery, this);
+  };
+}(jQuery, this));

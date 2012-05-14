@@ -1,4 +1,4 @@
-﻿(function ($, undefined) {
+(function ($, undefined) {
   $.geo._serviceTypes.tiled = (function () {
     return {
       create: function (map, serviceContainer, service, index) {
@@ -40,10 +40,10 @@
             webkitTransition: "",
             transition: "",
             left: function ( index, value ) {
-              return parseInt( value ) + dx;
+              return parseInt( value, 10 ) + dx;
             },
             top: function ( index, value ) {
-              return parseInt( value ) + dy;
+              return parseInt( value, 10 ) + dy;
             }
           });
 
@@ -72,8 +72,8 @@
 
                 currentPosition = scaleContainer.position(),
                 scaleOriginParts = scaleContainer.data("scaleOrigin").split(","),
-                totalDx = parseInt(scaleOriginParts[0]) - currentPosition.left,
-                totalDy = parseInt(scaleOriginParts[1]) - currentPosition.top,
+                totalDx = parseInt(scaleOriginParts[0], 10) - currentPosition.left,
+                totalDy = parseInt(scaleOriginParts[1], 10) - currentPosition.top,
 
                 mapCenterOriginal = map._getCenter(),
                 mapCenter = [
@@ -102,7 +102,18 @@
 
                 opacity = service.style.opacity,
 
-                x, y;
+                x, y,
+
+                loadImageDeferredDone = function( url ) {
+                  // when a Deferred call is done, add the image to the map
+                  // a reference to the correct img element is on the Deferred object itself
+                  serviceObj._loadImage( $.data( this, "img" ), url, pixelSize, serviceState, serviceContainer, opacity );
+                },
+
+                loadImageDeferredFail = function( ) {
+                  $.data( this, "img" ).remove( );
+                  serviceState.loadCount--;
+                };
 
             for ( x = tileX; x < tileX2; x++ ) {
               for ( y = tileY; y < tileY2; y++ ) {
@@ -141,8 +152,8 @@
                   if ( isFunc ) {
                     imageUrl = service[ urlProp ]( urlArgs );
                   } else {
-                    $.template( "geoSrc", service[ urlProp ] );
-                    imageUrl = $.render( urlArgs, "geoSrc" );
+                    $.templates( "geoSrc", service[ urlProp ] );
+                    imageUrl = $.render[ "geoSrc" ]( urlArgs );
                   }
                   /* end same as refresh 3 */
 
@@ -169,14 +180,12 @@
 
                   if ( typeof imageUrl === "string" ) {
                     serviceObj._loadImage( $img, imageUrl, pixelSize, serviceState, serviceContainer, opacity );
-                  } else {
+                  } else if ( imageUrl ) {
                     // assume Deferred
-                    imageUrl.done( function( url ) {
-                      serviceObj._loadImage( $img, url, pixelSize, serviceState, serviceContainer, opacity );
-                    } ).fail( function( ) {
-                      $img.remove( );
-                      serviceState.loadCount--;
-                    } );
+                    $.data( imageUrl, "img", $img );
+                    imageUrl.done( loadImageDeferredDone ).fail( loadImageDeferredFail );
+                  } else {
+                    $img.remove( );
                   }
 
                   /* end same as refresh 4 */
@@ -276,7 +285,18 @@
 
               opacity = service.style.opacity,
 
-              x, y;
+              x, y,
+
+              loadImageDeferredDone = function( url ) {
+                // when a Deferred call is done, add the image to the map
+                // a reference to the correct img element is on the Deferred object itself
+                serviceObj._loadImage( $.data( this, "img" ), url, pixelSize, serviceState, $serviceContainer, opacity );
+              },
+
+              loadImageDeferredFail = function( ) {
+                $.data( this, "img" ).remove( );
+                serviceState.loadCount--;
+              };
 
           if (serviceState.reloadTiles) {
             scaleContainers.find("img").attr("data-dirty", "true");
@@ -297,8 +317,8 @@
               tile = $img.attr("data-tile").split(",");
 
               $img.css({
-                left: Math.round(((parseInt(tile[0]) - fullXAtScale) * 100) + (serviceLeft - (serviceLeft % tileWidth)) / tileWidth * 100) + "%",
-                top: Math.round(((parseInt(tile[1]) - fullYAtScale) * 100) + (serviceTop - (serviceTop % tileHeight)) / tileHeight * 100) + "%"
+                left: Math.round(((parseInt(tile[0], 10) - fullXAtScale) * 100) + (serviceLeft - (serviceLeft % tileWidth)) / tileWidth * 100) + "%",
+                top: Math.round(((parseInt(tile[1], 10) - fullYAtScale) * 100) + (serviceTop - (serviceTop % tileHeight)) / tileHeight * 100) + "%"
               });
 
               if (opacity < 1) {
@@ -343,8 +363,8 @@
                 if ( isFunc ) {
                   imageUrl = service[ urlProp ]( urlArgs );
                 } else {
-                  $.template( "geoSrc", service[ urlProp ] );
-                  imageUrl = $.render( urlArgs, "geoSrc" );
+                  $.templates( "geoSrc", service[ urlProp ] );
+                  imageUrl = $.render[ "geoSrc" ]( urlArgs );
                 }
 
                 serviceState.loadCount++;
@@ -369,14 +389,12 @@
 
                 if ( typeof imageUrl === "string" ) {
                   serviceObj._loadImage( $img, imageUrl, pixelSize, serviceState, $serviceContainer, opacity );
-                } else {
+                } else if ( imageUrl ) {
                   // assume Deferred
-                  imageUrl.done( function( url ) {
-                    serviceObj._loadImage( $img, url, pixelSize, serviceState, $serviceContainer, opacity );
-                  } ).fail( function( ) {
-                    $img.remove( );
-                    serviceState.loadCount--;
-                  } );
+                  $.data( imageUrl, "img", $img );
+                  imageUrl.done( loadImageDeferredDone ).fail( loadImageDeferredFail );
+                } else {
+                  $img.remove( );
                 }
               }
             }
@@ -436,5 +454,5 @@
         }).attr("src", url);
       }
     };
-  })();
-})(jQuery);
+  }());
+}(jQuery));
